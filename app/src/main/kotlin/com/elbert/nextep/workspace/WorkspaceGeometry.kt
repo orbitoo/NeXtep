@@ -113,6 +113,21 @@ data class WorkspaceGeometry(
     fun isRotationOf(previous: WorkspaceGeometry): Boolean =
         displayRotation != previous.displayRotation && this == previous.rotatedTo(displayRotation)
 
+    /** True if a display coordinate lies in the edge chrome owned by NeXtep's control strip or sidebar. */
+    fun isPointInClaimedChrome(x: Float, y: Float): Boolean {
+        val inTopBarRegion = if (isLandscape) {
+            if (isControlOnLeft) x < contentLeft.toFloat() else x >= contentRight.toFloat()
+        } else {
+            y < contentTop.toFloat()
+        }
+        val inSidebarRegion = if (isLandscape) {
+            if (isSidebarAtTop) y < contentTop.toFloat() else y >= contentBottom.toFloat()
+        } else {
+            if (sidebarSide == SidebarSide.LEFT) x < contentLeft.toFloat() else x >= contentRight.toFloat()
+        }
+        return inTopBarRegion || inSidebarRegion
+    }
+
     companion object {
         const val TOP_HEIGHT_FRACTION = 0.265f
         const val SIDEBAR_WIDTH_FRACTION = 0.267f

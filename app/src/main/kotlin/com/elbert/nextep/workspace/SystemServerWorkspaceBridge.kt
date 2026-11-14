@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.Display
+import com.elbert.nextep.framework.HyperOsFreeformCompat
 import com.elbert.nextep.logging.NeXtepLog
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -19,6 +20,7 @@ object SystemServerWorkspaceBridge {
     internal const val BLOCK_SYSTEM_DRAG_SHARE_KEY = "nextep_workspace_block_system_drag_share_v1"
     private val geometryObservationStarted = AtomicBoolean(false)
     @Volatile private var observedGeometry: WorkspaceGeometry? = null
+    @Volatile private var observedActive: Boolean = false
 
     /** Subscribe once in system_server. WM animation callbacks then read only RAM. */
     fun startGeometryObservation(context: Context) {
@@ -27,13 +29,30 @@ object SystemServerWorkspaceBridge {
         handler.post {
             runCatching {
                 val resolver = context.contentResolver
-                fun refresh() { observedGeometry = readActiveGeometry(context) }
+                fun refresh() {
+                    observedActive = isWorkspaceActive(context)
+                    observedGeometry = if (observedActive) readActiveGeometry(context) else null
+                }
+                fun refreshFreeform() {
+                    HyperOsFreeformCompat.applyEncodedTrackedTaskIds(
+                        Settings.Global.getString(resolver, HyperOsFreeformCompat.MIUI_FREEFORM_TASKS_KEY),
+                    )
+                }
                 val observer = object : ContentObserver(handler) {
                     override fun onChange(selfChange: Boolean) = refresh()
                 }
+                val freeformObserver = object : ContentObserver(handler) {
+                    override fun onChange(selfChange: Boolean) = refreshFreeform()
+                }
                 resolver.registerContentObserver(Settings.Global.getUriFor(ACTIVE_KEY), false, observer)
                 resolver.registerContentObserver(Settings.Global.getUriFor(GEOMETRY_KEY), false, observer)
+                resolver.registerContentObserver(
+                    Settings.Global.getUriFor(HyperOsFreeformCompat.MIUI_FREEFORM_TASKS_KEY),
+                    false,
+                    freeformObserver,
+                )
                 refresh()
+                refreshFreeform()
             }.onFailure {
                 geometryObservationStarted.set(false)
                 NeXtepLog.warn("system_server_bridge", "Geometry observation unavailable", it)
@@ -42,6 +61,22 @@ object SystemServerWorkspaceBridge {
     }
 
     fun observedActiveGeometry(): WorkspaceGeometry? = observedGeometry
+
+    fun isObservedWorkspaceActive(): Boolean = observedActive
+
+    fun isGeometryObservationStarted(): Boolean = geometryObservationStarted.get()
+
+    fun publishMiuiFreeformTasks(context: Context) {
+        runCatching {
+            val encoded = HyperOsFreeformCompat.encodeTrackedTaskIds()
+            val resolver = context.contentResolver
+            if (Settings.Global.getString(resolver, HyperOsFreeformCompat.MIUI_FREEFORM_TASKS_KEY) != encoded) {
+                Settings.Global.putString(resolver, HyperOsFreeformCompat.MIUI_FREEFORM_TASKS_KEY, encoded)
+            }
+        }.onFailure {
+            NeXtepLog.warn("system_server_bridge", "Could not publish MIUI freeform tasks", it)
+        }
+    }
 
     /** Only the injected SystemUI host writes this preference into the privileged bridge. */
     fun publishBlockSystemDragShare(context: Context, enabled: Boolean) {
