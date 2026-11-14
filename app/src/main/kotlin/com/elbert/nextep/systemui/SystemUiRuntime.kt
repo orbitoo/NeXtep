@@ -112,6 +112,8 @@ object SystemUiRuntime {
             workspaceConfig = queriedConfig
             SystemServerWorkspaceBridge.publishBlockSystemDragShare(applicationContext,
                 queriedConfig.blockSystemDragShareEnabled)
+            SystemServerWorkspaceBridge.publishLandscapeVideoMode(applicationContext,
+                queriedConfig.landscapeVideoMode)
             AppLanguage.updateHostLanguage(queriedConfig.languageTag)
             workspaceConfigReady = true
             lifecycleHandler.post {
@@ -122,6 +124,7 @@ object SystemUiRuntime {
                         workspaceConfig.slotAutoHibernateEnabled,
                         workspaceConfig.slotAutoHibernateTimeoutSeconds,
                     )
+                    windowController.setLandscapeVideoMode(workspaceConfig.landscapeVideoMode)
                 }
                 if (::fourFingerGestures.isInitialized) fourFingerGestures.updateConfig(workspaceConfig)
             }
@@ -133,7 +136,8 @@ object SystemUiRuntime {
                     "${workspaceConfig.slotAutoHibernateTimeoutSeconds}s " +
                     "autoMinimizeMain=${workspaceConfig.autoMinimizeMainOnTopAppSwitch} " +
                     "navigationButtons=${workspaceConfig.navigationButtonsEnabled} " +
-                    "blockSystemDragShare=${workspaceConfig.blockSystemDragShareEnabled}",
+                    "blockSystemDragShare=${workspaceConfig.blockSystemDragShareEnabled} " +
+                    "landscapeMode=${workspaceConfig.landscapeVideoMode.wireValue}",
             )
         }
     }

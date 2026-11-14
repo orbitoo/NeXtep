@@ -18,9 +18,11 @@ import android.widget.FrameLayout
 import com.elbert.nextep.R
 import com.elbert.nextep.config.AppLanguage
 import com.elbert.nextep.config.WorkspaceConfigContract
+import com.elbert.nextep.display.RotatedMainPaneHost
 import com.elbert.nextep.display.SlotState
 import com.elbert.nextep.display.SlotTaskCoordinator
 import com.elbert.nextep.display.SlotTaskDrag
+import com.elbert.nextep.display.TopPinnedPaneHost
 import com.elbert.nextep.display.VirtualDisplaySlot
 import com.elbert.nextep.display.WORKSPACE_SLOT_COUNT
 import com.elbert.nextep.framework.TaskSurfaceCompat
@@ -59,6 +61,10 @@ class NeXtepWindowController(
     private var slotBackgroundSwipeEnabled = true
     private var slotAutoHibernateEnabled = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED
     private var slotAutoHibernateTimeoutSeconds = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS
+    private var landscapeVideoMode = com.elbert.nextep.workspace.LandscapeVideoMode.DEFAULT
+    private var rotatedMainHost: RotatedMainPaneHost? = null
+    private var topPinnedHost: TopPinnedPaneHost? = null
+    private var sceneObserver: android.database.ContentObserver? = null
     private var frostStrength = 50
     private val swapAnimator = WorkspaceSwapAnimator(context)
     private val internalDrag = WorkspaceInternalDragController(
@@ -135,6 +141,9 @@ class NeXtepWindowController(
         suspended = true
         cancelDragVisuals()
         clearHomePreview()
+        stopSceneObservation()
+        rotatedMainHost?.exitToPrimaryDisplay(presentInMain = false)
+        topPinnedHost?.exitToPrimaryDisplay(presentInMain = false)
         backdropGeneration.incrementAndGet()
         slotCoordinator?.setSuspended(true)
         topAppStrip?.setWorkspaceVisible(false)
@@ -155,6 +164,7 @@ class NeXtepWindowController(
         cancelPendingResumeContent()
         workspaceVisible = true
         suspended = false
+        startSceneObservation()
         // Wake reuses attached windows and the recorded layout. Re-running show()
         // starts a fresh alpha=0 entry animation and repeats all display setup.
         val geometry = geometry()
@@ -235,6 +245,7 @@ class NeXtepWindowController(
     fun show(): WorkspaceGeometry {
         initializeIfNeeded()
         check(records.size == EXPECTED_WINDOW_COUNT) { "SystemUI windows are unavailable" }
+        startSceneObservation()
         workspaceVisible = true
         reconfigure().getOrThrow()
         records.forEach { record ->
@@ -268,6 +279,11 @@ class NeXtepWindowController(
     fun hide() {
         cancelPendingRotationDraw()
         cancelPendingResumeContent()
+        stopSceneObservation()
+        rotatedMainHost?.exitToPrimaryDisplay(presentInMain = false)
+        topPinnedHost?.exitToPrimaryDisplay(presentInMain = false)
+        SystemServerWorkspaceBridge.publishSceneRequest(context, null)
+        SystemServerWorkspaceBridge.publishRotatedBackRegion(context, null)
         workspaceVisible = false
         cancelDragVisuals()
         clearHomePreview()
@@ -310,6 +326,15 @@ class NeXtepWindowController(
     fun onTasksChanged() {
         slotCoordinator?.onTasksChanged()
         FloatingWindowTouchPassThroughController.notifyFloatingWindowsChanged()
+        rotatedMainHost?.let { host ->
+            val hostedTaskId = host.activeTaskId() ?: return@let
+            val snapshot = taskRepository.findTask(hostedTaskId)
+            val vdId = host.virtualDisplayId()
+            if (snapshot == null || (vdId != null && snapshot.displayId != vdId)) {
+                host.exitToPrimaryDisplay(presentInMain = snapshot != null && snapshot.displayId == android.view.Display.DEFAULT_DISPLAY)
+            }
+        }
+        topPinnedHost?.verifyTaskAlive()
     }
 
     internal fun energySnapshot() = android.os.Bundle().apply {
@@ -374,6 +399,144 @@ class NeXtepWindowController(
         slotAutoHibernateEnabled = enabled
         slotAutoHibernateTimeoutSeconds = normalizedTimeout
         slotCoordinator?.setAutoHibernateConfig(enabled, normalizedTimeout)
+    }
+
+    fun setLandscapeVideoMode(mode: com.elbert.nextep.workspace.LandscapeVideoMode) {
+        if (landscapeVideoMode == mode) return
+        landscapeVideoMode = mode
+        SystemServerWorkspaceBridge.publishLandscapeVideoMode(context, mode)
+        when (mode) {
+            com.elbert.nextep.workspace.LandscapeVideoMode.FULLSCREEN -> {
+                val hadHosted = rotatedMainHost?.isActive() == true || topPinnedHost?.isActive() == true
+                if (rotatedMainHost?.isActive() == true) {
+                    rotatedMainHost?.exitToPrimaryDisplay(presentInMain = false)
+                }
+                if (topPinnedHost?.isActive() == true) {
+                    topPinnedHost?.exitToPrimaryDisplay(presentInMain = false)
+                }
+                if (hadHosted) {
+                    onExitRequested()
+                }
+            }
+            com.elbert.nextep.workspace.LandscapeVideoMode.TURNED -> {
+                if (topPinnedHost?.isActive() == true) {
+                    topPinnedHost?.exitToPrimaryDisplay(presentInMain = true)
+                }
+            }
+            com.elbert.nextep.workspace.LandscapeVideoMode.TOP -> {
+                if (rotatedMainHost?.isActive() == true) {
+                    rotatedMainHost?.exitToPrimaryDisplay(presentInMain = true)
+                }
+            }
+        }
+    }
+
+    private fun ensureRotatedMainHost(): RotatedMainPaneHost {
+        rotatedMainHost?.let { return it }
+        return RotatedMainPaneHost(
+            context = context,
+            windowManager = windowManager,
+            windowTypeProvider = SystemUiWindowTypeResolver::resolve,
+            taskRepository = taskRepository,
+            mainTaskPresenter = mainTaskPresenter,
+            geometryProvider = ::geometry,
+        ).also { rotatedMainHost = it }
+    }
+
+    private fun ensureTopPinnedHost(): TopPinnedPaneHost {
+        topPinnedHost?.let { return it }
+        return TopPinnedPaneHost(
+            context = context,
+            mainTaskPresenter = mainTaskPresenter,
+            geometryProvider = ::geometry,
+            pagerProvider = { controlAreaPager },
+        ).also { topPinnedHost = it }
+    }
+
+    private fun startSceneObservation() {
+        SystemServerWorkspaceBridge.publishLandscapeVideoMode(context, landscapeVideoMode)
+        SystemServerWorkspaceBridge.publishSceneRequest(context, null)
+        SystemServerWorkspaceBridge.publishRotatedBackRegion(context, null)
+        if (sceneObserver != null) return
+        sceneObserver = SystemServerWorkspaceBridge.observeSceneRequests(context, ::handleSceneRequest)
+    }
+
+    private fun stopSceneObservation() {
+        sceneObserver?.let { observer ->
+            runCatching { context.contentResolver.unregisterContentObserver(observer) }
+        }
+        sceneObserver = null
+    }
+
+    private fun handleSceneRequest(request: com.elbert.nextep.workspace.WorkspaceSceneRequest?) {
+        if (request == null || !workspaceVisible || suspended) return
+        if (!request.isFresh(android.os.SystemClock.elapsedRealtime())) return
+
+        val currentRotatedTaskId = rotatedMainHost?.activeTaskId()
+        if (currentRotatedTaskId != null && currentRotatedTaskId == request.taskId) {
+            if (!request.isLandscapeOrientation) {
+                rotatedMainHost?.exitToPrimaryDisplay(presentInMain = true)
+                SystemServerWorkspaceBridge.publishSceneRequest(context, null)
+            }
+            return
+        }
+
+        val currentTopPinnedTaskId = topPinnedHost?.activeTaskId()
+        if (currentTopPinnedTaskId != null && currentTopPinnedTaskId == request.taskId) {
+            if (!request.isLandscapeOrientation) {
+                topPinnedHost?.exitToPrimaryDisplay(presentInMain = true)
+                SystemServerWorkspaceBridge.publishSceneRequest(context, null)
+            }
+            return
+        }
+
+        if (!request.isLandscapeOrientation) return
+        val foreground = taskRepository.foregroundTask() ?: return
+        if (foreground.taskId != request.taskId) return
+        val pkg = foreground.component.packageName
+        if (pkg == TriggerBroadcastContract.SYSTEM_UI_PACKAGE ||
+            pkg == TriggerBroadcastContract.resolveHomePackage(context)
+        ) {
+            return
+        }
+
+        when (landscapeVideoMode) {
+            com.elbert.nextep.workspace.LandscapeVideoMode.FULLSCREEN -> {
+                NeXtepLog.info("workspace_scene", "Auto-exiting workspace for FULLSCREEN taskId=${request.taskId}")
+                SystemServerWorkspaceBridge.publishSceneRequest(context, null)
+                onExitRequested()
+            }
+            com.elbert.nextep.workspace.LandscapeVideoMode.TURNED -> {
+                val geom = geometry()
+                if (geom.isLandscape) {
+                    NeXtepLog.info(
+                        "workspace_scene",
+                        "Display 0 already landscape; keeping taskId=${request.taskId} in main pane",
+                    )
+                    return
+                }
+                NeXtepLog.info(
+                    "workspace_scene",
+                    "Entering TURNED rotated pane taskId=${request.taskId} mode=$landscapeVideoMode",
+                )
+                ensureRotatedMainHost().enter(request.taskId, request.orientation, geom)
+            }
+            com.elbert.nextep.workspace.LandscapeVideoMode.TOP -> {
+                val geom = geometry()
+                if (geom.isLandscape) {
+                    NeXtepLog.info(
+                        "workspace_scene",
+                        "Display 0 already landscape; keeping taskId=${request.taskId} in main pane",
+                    )
+                    return
+                }
+                NeXtepLog.info(
+                    "workspace_scene",
+                    "Entering TOP pinned pane taskId=${request.taskId} orientation=${request.orientation}",
+                )
+                ensureTopPinnedHost().enter(request.taskId, "orientation=${request.orientation}")
+            }
+        }
     }
 
     fun reconfigure(rotationOnly: Boolean = false): Result<WorkspaceGeometry> = runCatching {
@@ -453,17 +616,25 @@ class NeXtepWindowController(
                 context = context,
                 initialSidebarSide = sidebarSide,
                 onAppClicked = { intent ->
-                    slotCoordinator?.openInMain(
-                        intent,
-                        autoMinimizeCurrent = SystemUiRuntime.shouldAutoMinimizeMainOnTopAppSwitch(),
-                    )?.onFailure { error ->
-                        NeXtepLog.warn("top_apps", "Unable to open ${intent.component} in main", error)
+                    if (topPinnedHost?.matchesPackage(intent.component?.packageName) == true) {
+                        topPinnedHost?.exitToPrimaryDisplay(presentInMain = true)
+                    } else {
+                        slotCoordinator?.openInMain(
+                            intent,
+                            autoMinimizeCurrent = SystemUiRuntime.shouldAutoMinimizeMainOnTopAppSwitch(),
+                        )?.onFailure { error ->
+                            NeXtepLog.warn("top_apps", "Unable to open ${intent.component} in main", error)
+                        }
                     }
                 },
                 onMediaClicked = { session ->
-                    slotCoordinator?.openMediaInMain(session)?.onFailure { error ->
-                        NeXtepLog.warn("media_control", "Unable to open media app in main", error)
-                        android.widget.Toast.makeText(context, AppLanguage.string(context, R.string.media_open_failed), android.widget.Toast.LENGTH_SHORT).show()
+                    if (topPinnedHost?.matchesPackage(session.packageName) == true) {
+                        topPinnedHost?.exitToPrimaryDisplay(presentInMain = true)
+                    } else {
+                        slotCoordinator?.openMediaInMain(session)?.onFailure { error ->
+                            NeXtepLog.warn("media_control", "Unable to open media app in main", error)
+                            android.widget.Toast.makeText(context, AppLanguage.string(context, R.string.media_open_failed), android.widget.Toast.LENGTH_SHORT).show()
+                        }
                     }
                 },
                 onSidebarSideRequested = onSidebarSideRequested,
@@ -596,6 +767,16 @@ class NeXtepWindowController(
             controlAreaPager?.setLandscape(geometry.isLandscape, geometry.isControlOnLeft)
             controlAreaPager?.refreshHost()
         }
+        if (workspaceVisible && !suspended && rotatedMainHost?.isActive() == true) {
+            if (geometry.isLandscape) {
+                rotatedMainHost?.exitToPrimaryDisplay(presentInMain = true)
+            } else {
+                rotatedMainHost?.updateGeometry(geometry)
+            }
+        }
+        if (workspaceVisible && !suspended && topPinnedHost?.isActive() == true && geometry.isLandscape) {
+            topPinnedHost?.exitToPrimaryDisplay(presentInMain = true)
+        }
     }
 
     private fun configureWindow(
@@ -716,6 +897,11 @@ class NeXtepWindowController(
                     internalDrag.start(source, WorkspaceInternalDragController.Payload.Slot(drag))
                 },
                 onInternalDragTouch = internalDrag::touch,
+                beforeMainTaskChange = {
+                    if (rotatedMainHost?.isActive() == true) {
+                        rotatedMainHost?.exitToPrimaryDisplay(presentInMain = false)
+                    }
+                },
             ).also {
                 it.setAutoHibernateConfig(slotAutoHibernateEnabled, slotAutoHibernateTimeoutSeconds)
             }
