@@ -124,6 +124,7 @@ object SystemUiHook {
                                 HookGuard.run("system_dialog_layout_apply") {
                                     SystemDialogLayoutController.beforeLayout(view, params)
                                     SystemUiShadeInputController.beforeLayout(view, params)
+                                    SystemUiRootTransformController.observeRoot(view)
                                 }
                             }
                             return chain.proceed()
@@ -132,6 +133,7 @@ object SystemUiHook {
                 }
         }
         SystemUiBrightnessMirrorHook.install(module, classLoader)
+        HyperOsShadeTransformHooks.install(module, classLoader)
         HookGuard.run("systemui_framework_startup") {
             val method = Instrumentation::class.java.getDeclaredMethod(
                 "callApplicationOnCreate",
@@ -163,6 +165,7 @@ object SystemUiHook {
                         MotionEvent::class.java,
                     )
                     method.isAccessible = true
+                    runCatching { module.deoptimize(method) }
                     module.hook(method).intercept(SystemUiRootTouchHooker())
                     NeXtepLog.info(
                         "systemui_root_touch_override",

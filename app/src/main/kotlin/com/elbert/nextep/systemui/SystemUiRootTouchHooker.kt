@@ -25,7 +25,9 @@ class SystemUiRootTouchHooker : XposedInterface.Hooker {
             SystemUiRootGestureRuntime.dispatch(view, event) {
                 val transform = SystemUiRootTransformController.mapToContent(view, event)
                 try {
-                    chain.proceed()
+                    SystemUiShadeCoordinateScope.withRawTouchTransform(transform) {
+                        chain.proceed()
+                    }
                 } finally {
                     SystemUiRootTransformController.mapToScreen(event, transform)
                 }
@@ -76,6 +78,7 @@ private object SystemUiRootGestureRuntime {
             )
             shadeTracking = event.rawY <= topTrackingLimit
             shadeTransformStarted = false
+            SystemUiRootTransformController.setTouchDragInProgress(shadeTracking)
             shadeDownX = event.rawX
             shadeDownY = event.rawY
         }
@@ -104,6 +107,7 @@ private object SystemUiRootGestureRuntime {
             event.actionMasked == MotionEvent.ACTION_CANCEL
         ) {
             shadeTracking = false
+            SystemUiRootTransformController.setTouchDragInProgress(false)
         }
 
         if (targetReference.get() !== view) return proceed()
