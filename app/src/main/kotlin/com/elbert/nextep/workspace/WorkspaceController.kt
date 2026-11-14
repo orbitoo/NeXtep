@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Looper
 import com.elbert.nextep.logging.NeXtepLog
+import com.elbert.nextep.systemui.HyperOsTransitionAndFreeformHooks
 import com.elbert.nextep.systemui.NeXtepWindowController
 import com.elbert.nextep.systemui.SystemUiRootTransformController
 import com.elbert.nextep.systemui.SystemDialogLayoutController
@@ -38,6 +39,7 @@ class WorkspaceController(
         state = WorkspaceState.Suspended(current.geometry)
         windowController.suspendForLock()
         SystemServerWorkspaceBridge.publish(applicationContext, false)
+        HyperOsTransitionAndFreeformHooks.onWorkspaceStateChanged(applicationContext, false, null)
         SystemUiRootTransformController.setActive(false)
         SystemDialogLayoutController.setGeometry(null)
         mainTaskPresenter.restoreForeground().onFailure {
@@ -55,6 +57,7 @@ class WorkspaceController(
             SystemUiRootTransformController.setGeometry(geometry)
             windowController.resumeAfterLock()
             SystemServerWorkspaceBridge.publish(applicationContext, true, geometry)
+            HyperOsTransitionAndFreeformHooks.onWorkspaceStateChanged(applicationContext, true, geometry)
             // NotificationShade also hosts the exiting keyguard. Unlock must
             // leave that native window untouched; fit it on the next shade gesture.
             SystemUiRootTransformController.setActive(true, fitExistingShade = false)
@@ -66,6 +69,7 @@ class WorkspaceController(
             // Window failure must release the workspace gate so native HOME/SystemUI
             // can render, rather than hiding everything on every unlock retry.
             SystemServerWorkspaceBridge.publish(applicationContext, false)
+            HyperOsTransitionAndFreeformHooks.onWorkspaceStateChanged(applicationContext, false, null)
             SystemUiRootTransformController.setActive(false)
             SystemDialogLayoutController.setGeometry(null)
             mainTaskPresenter.restoreForeground().onFailure { rollbackError ->
@@ -104,9 +108,8 @@ class WorkspaceController(
             TriggerBroadcastContract.systemUiSetIntent(applicationContext, true)?.let {
                 applicationContext.sendBroadcast(it)
             }
-            applicationContext.sendBroadcast(
-                TriggerBroadcastContract.assistantScreenSetIntent(applicationContext, true),
-            )
+            TriggerBroadcastContract.assistantScreenSetIntents(applicationContext, true)
+                .forEach(applicationContext::sendBroadcast)
             state = WorkspaceState.Active(geometry)
             SystemDialogLayoutController.setGeometry(geometry)
             NeXtepLog.info("workspace", "Sidebar moved side=$side geometry=$geometry")
@@ -141,13 +144,13 @@ class WorkspaceController(
                 NeXtepLog.warn("workspace_configuration", "Main task settling during reconfigure; presentation will retry", it)
             }
             SystemServerWorkspaceBridge.publish(applicationContext, true, geometry)
+            HyperOsTransitionAndFreeformHooks.onWorkspaceStateChanged(applicationContext, true, geometry)
             if (!rotationOnly) {
                 TriggerBroadcastContract.systemUiSetIntent(applicationContext, true)?.let {
                     applicationContext.sendBroadcast(it)
                 }
-                applicationContext.sendBroadcast(
-                    TriggerBroadcastContract.assistantScreenSetIntent(applicationContext, true),
-                )
+                TriggerBroadcastContract.assistantScreenSetIntents(applicationContext, true)
+                    .forEach(applicationContext::sendBroadcast)
             }
             state = WorkspaceState.Active(geometry)
             SystemDialogLayoutController.setGeometry(geometry)
@@ -169,19 +172,19 @@ class WorkspaceController(
             SystemUiRootTransformController.setActive(true)
             val geometry = windowController.show()
             SystemServerWorkspaceBridge.publish(applicationContext, true, geometry)
-            applicationContext.sendBroadcast(
-                TriggerBroadcastContract.assistantScreenSetIntent(applicationContext, true),
-            )
+            HyperOsTransitionAndFreeformHooks.onWorkspaceStateChanged(applicationContext, true, geometry)
+            TriggerBroadcastContract.assistantScreenSetIntents(applicationContext, true)
+                .forEach(applicationContext::sendBroadcast)
             state = WorkspaceState.Active(geometry)
             SystemDialogLayoutController.setGeometry(geometry)
             NeXtepLog.info("workspace", "Entered geometry=$geometry")
             true
         } catch (error: Throwable) {
             SystemServerWorkspaceBridge.publish(applicationContext, false)
+            HyperOsTransitionAndFreeformHooks.onWorkspaceStateChanged(applicationContext, false, null)
             SystemDialogLayoutController.setGeometry(null)
-            applicationContext.sendBroadcast(
-                TriggerBroadcastContract.assistantScreenSetIntent(applicationContext, false),
-            )
+            TriggerBroadcastContract.assistantScreenSetIntents(applicationContext, false)
+                .forEach(applicationContext::sendBroadcast)
             windowController.hide()
             SystemUiRootTransformController.setActive(false)
             mainTaskPresenter.restoreForeground()
@@ -197,6 +200,7 @@ class WorkspaceController(
         state = WorkspaceState.Exiting
         return try {
             SystemServerWorkspaceBridge.publish(applicationContext, false)
+            HyperOsTransitionAndFreeformHooks.onWorkspaceStateChanged(applicationContext, false, null)
             SystemDialogLayoutController.setGeometry(null)
             SystemUiRootTransformController.setActive(false)
             val restoreResult = mainTaskPresenter.restoreForeground(animateToFullscreen = true)
