@@ -27,6 +27,8 @@
     <string name="auto_minimize_summary">前のアプリを空いている小ウィンドウに移します。空きがなければ通常どおり切り替えます。</string>
     <string name="navigation_buttons_title">3 ボタンナビゲーションへの対応</string>
     <string name="navigation_buttons_summary">3 ボタン操作ではオンに、ジェスチャー操作ではオフにしてください。システムの操作方式を変更した後は、このスイッチを切り替え直してください。</string>
+    <string name="exit_on_lock_title">画面ロック時にワークスペースを終了</string>
+    <string name="exit_on_lock_summary">オンにすると画面ロック時に通常モードへ戻り、ロック解除後に自動再開せず省電力になります。</string>
     <string name="frost_title">すりガラス</string>
     <string name="frost_summary">操作エリアと小ウィンドウの背景のぼかし強度を調整します。</string>
     <string name="frost_strength">ぼかしの強度</string>

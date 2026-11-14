@@ -27,6 +27,8 @@
     <string name="auto_minimize_summary">原应用移入空小窗，没有空位时正常切换。</string>
     <string name="navigation_buttons_title">虚拟按键适配</string>
     <string name="navigation_buttons_summary">使用三键导航时开启，手势导航请关闭。更改系统导航方式后，重新开关一次。</string>
+    <string name="exit_on_lock_title">锁屏时退出工作台</string>
+    <string name="exit_on_lock_summary">开启后锁屏自动退出多窗并释放小窗虚拟屏，解锁后回到普通桌面，更省电。</string>
     <string name="frost_title">磨砂玻璃</string>
     <string name="frost_summary">调整控制区域和小窗背景的磨砂强度。</string>
     <string name="frost_strength">磨砂强度</string>

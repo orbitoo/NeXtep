@@ -27,6 +27,8 @@
     <string name="auto_minimize_summary">이전 앱을 비어 있는 작은 창으로 이동합니다. 빈 창이 없으면 일반적으로 전환합니다.</string>
     <string name="navigation_buttons_title">3버튼 탐색 지원</string>
     <string name="navigation_buttons_summary">3버튼 탐색에서는 켜고 제스처 탐색에서는 끄세요. 시스템 탐색 방식을 변경한 후 이 스위치를 다시 전환하세요.</string>
+    <string name="exit_on_lock_title">화면 잠금 시 작업 공간 종료</string>
+    <string name="exit_on_lock_summary">켜면 화면을 잠글 때 일반 모드로 돌아가며 잠금 해제 후 자동 복구하지 않아 배터리를 절약합니다.</string>
     <string name="frost_title">반투명 유리</string>
     <string name="frost_summary">제어 영역과 작은 창 배경의 흐림 강도를 조절합니다.</string>
     <string name="frost_strength">흐림 강도</string>

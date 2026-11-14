@@ -35,6 +35,8 @@
     <string name="auto_minimize_summary">Move the previous app into an empty small window. Switch normally if none is available.</string>
     <string name="navigation_buttons_title">Three-button navigation support</string>
     <string name="navigation_buttons_summary">Enable for three-button navigation and disable for gestures. Toggle again after changing the system navigation mode.</string>
+    <string name="exit_on_lock_title">Exit workspace when locking screen</string>
+    <string name="exit_on_lock_summary">Return to normal mode after locking the screen instead of resuming the workspace on unlock.</string>
     <string name="frost_title">Frosted glass</string>
     <string name="frost_summary">Adjust the frost strength of the controls and small-window backgrounds.</string>
     <string name="frost_strength">Frost strength</string>

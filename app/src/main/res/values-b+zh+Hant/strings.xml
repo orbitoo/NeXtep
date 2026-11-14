@@ -27,6 +27,8 @@
     <string name="auto_minimize_summary">原應用程式移入空的小視窗，沒有空位時正常切換。</string>
     <string name="navigation_buttons_title">虛擬按鍵適配</string>
     <string name="navigation_buttons_summary">使用三鍵導覽時開啟，手勢導覽請關閉。變更系統導覽方式後，重新切換一次此開關。</string>
+    <string name="exit_on_lock_title">鎖定螢幕時退出工作區</string>
+    <string name="exit_on_lock_summary">開啟後鎖屏自動退出多視窗並釋放小視窗虛擬螢幕，解鎖後回到一般介面，更省電。</string>
     <string name="frost_title">霧面玻璃</string>
     <string name="frost_summary">調整控制區域和小視窗背景的霧面強度。</string>
     <string name="frost_strength">霧面強度</string>
