@@ -21,6 +21,8 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
+import com.elbert.nextep.display.WorkspaceSlotCount
+import com.elbert.nextep.trigger.TriggerGesture
 import com.elbert.nextep.workspace.LandscapeVideoMode
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
@@ -77,6 +79,8 @@ object SettingsScreen {
             ).map { activity.getString(it) }.toTypedArray()
             val selectedLanguage = AppLanguage.selectedTag(activity)
             val launcherIconButton = LauncherIconPreference.createButton(activity)
+            val triggerGesturesButton = createTriggerGesturesButton(activity, repository, settings.triggerGestures)
+            val slotCountButton = createSlotCountButton(activity, repository, settings.slotCount)
             val fourFingerBlacklistButton = createFourFingerBlacklistButton(activity, repository, apps)
             val landscapeVideoModeButton = createLandscapeVideoModeButton(activity, repository, settings.landscapeVideoMode)
             val languageButton = SettingsRowButton.create(activity).apply {
@@ -144,13 +148,16 @@ object SettingsScreen {
                         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                     }, matchWidth())
                     addView(settingDivider(activity))
-                    addView(settingSwitchRow(
+                    addView(settingRow(
                         activity,
-                        activity.getString(R.string.gesture_title),
-                        activity.getString(R.string.gesture_summary),
-                        settings.statusBarGestureEnabled,
-                        repository::setStatusBarGestureEnabled,
-                    ), matchWidth())
+                        activity.getString(R.string.trigger_gestures_title),
+                        activity.getString(R.string.trigger_gestures_summary),
+                        triggerGesturesButton,
+                    ).apply {
+                        setOnClickListener { triggerGesturesButton.performClick() }
+                        isFocusable = false
+                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    }, matchWidth())
                     addView(settingDivider(activity))
                     addView(settingSwitchRow(
                         activity,
@@ -228,6 +235,17 @@ object SettingsScreen {
                         settings.navigationButtonsEnabled,
                         repository::setNavigationButtonsEnabled,
                     ), matchWidth())
+                    addView(settingDivider(activity))
+                    addView(settingRow(
+                        activity,
+                        activity.getString(R.string.slot_count_title),
+                        activity.getString(R.string.slot_count_summary),
+                        slotCountButton,
+                    ).apply {
+                        setOnClickListener { slotCountButton.performClick() }
+                        isFocusable = false
+                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    }, matchWidth())
                     addView(settingDivider(activity))
                     addView(settingRow(
                         activity,
@@ -866,6 +884,84 @@ object SettingsScreen {
                         dialog.dismiss()
                         current = modes[index]
                         repository.setLandscapeVideoMode(current)
+                        updateLabel()
+                    }
+                    .setNegativeButton(R.string.action_cancel, null)
+                    .show()
+            }
+        }
+    }
+
+    private fun createTriggerGesturesButton(
+        activity: AppCompatActivity,
+        repository: SettingsRepository,
+        initialGestures: Set<TriggerGesture>,
+    ): MaterialButton {
+        val orderedGestures = TriggerGesture.ALL_ORDERED.toTypedArray()
+        val labels = arrayOf(
+            activity.getString(R.string.trigger_gesture_bottom_left),
+            activity.getString(R.string.trigger_gesture_bottom_right),
+            activity.getString(R.string.trigger_gesture_two_finger),
+            activity.getString(R.string.trigger_gesture_status_bar_swipe),
+        )
+        var current = TriggerGesture.normalize(initialGestures)
+        return SettingsRowButton.create(activity).apply {
+            fun updateLabel() {
+                text = when (current.size) {
+                    0 -> activity.getString(R.string.trigger_gestures_none)
+                    1 -> labels[orderedGestures.indexOf(current.first())]
+                    else -> activity.getString(R.string.trigger_gestures_count, current.size)
+                }
+                contentDescription = activity.getString(
+                    R.string.setting_description,
+                    activity.getString(R.string.trigger_gestures_title),
+                    text,
+                )
+            }
+            updateLabel()
+            setOnClickListener {
+                val checked = BooleanArray(orderedGestures.size) { orderedGestures[it] in current }
+                com.google.android.material.dialog.MaterialAlertDialogBuilder(activity)
+                    .setTitle(R.string.trigger_gestures_title)
+                    .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                        checked[which] = isChecked
+                    }
+                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                        current = orderedGestures.filterIndexedTo(LinkedHashSet()) { index, _ -> checked[index] }
+                        repository.setTriggerGestures(current)
+                        updateLabel()
+                    }
+                    .setNegativeButton(R.string.action_cancel, null)
+                    .show()
+            }
+        }
+    }
+
+    private fun createSlotCountButton(
+        activity: AppCompatActivity,
+        repository: SettingsRepository,
+        initialCount: Int,
+    ): MaterialButton {
+        val counts = WorkspaceSlotCount.SUPPORTED.toTypedArray()
+        val labels = counts.map { activity.getString(R.string.slot_count_option, it) }.toTypedArray()
+        var current = WorkspaceSlotCount.normalize(initialCount)
+        return SettingsRowButton.create(activity).apply {
+            fun updateLabel() {
+                text = activity.getString(R.string.slot_count_option, current)
+                contentDescription = activity.getString(
+                    R.string.setting_description,
+                    activity.getString(R.string.slot_count_title),
+                    text,
+                )
+            }
+            updateLabel()
+            setOnClickListener {
+                com.google.android.material.dialog.MaterialAlertDialogBuilder(activity)
+                    .setTitle(R.string.slot_count_title)
+                    .setSingleChoiceItems(labels, counts.indexOf(current).coerceAtLeast(0)) { dialog, index ->
+                        dialog.dismiss()
+                        current = counts[index]
+                        repository.setSlotCount(current)
                         updateLabel()
                     }
                     .setNegativeButton(R.string.action_cancel, null)
