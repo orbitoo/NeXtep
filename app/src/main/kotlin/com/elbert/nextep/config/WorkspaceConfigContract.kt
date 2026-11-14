@@ -36,6 +36,7 @@ data class WorkspaceTopConfig(
     val fourFingerGestureBlacklist: Set<String> = emptySet(),
     val blockSystemDragShareEnabled: Boolean = WorkspaceConfigContract.DEFAULT_BLOCK_SYSTEM_DRAG_SHARE_ENABLED,
     val returnAfterSharingEnabled: Boolean = WorkspaceConfigContract.DEFAULT_RETURN_AFTER_SHARING_ENABLED,
+    val exitOnLock: Boolean = false,
 )
 
 object WorkspaceConfigContract {
@@ -62,6 +63,7 @@ object WorkspaceConfigContract {
     const val DEFAULT_RETURN_AFTER_SHARING_ENABLED = true
     const val EXTRA_AUTO_MINIMIZE_MAIN = "com.elbert.nextep.extra.AUTO_MINIMIZE_MAIN_ON_TOP_APP_SWITCH"
     const val EXTRA_NAVIGATION_BUTTONS_ENABLED = "com.elbert.nextep.extra.NAVIGATION_BUTTONS_ENABLED"
+    const val EXTRA_EXIT_ON_LOCK = "com.elbert.nextep.extra.EXIT_ON_LOCK"
     const val EXTRA_SWAP_ANIMATION_DURATION_MS = "com.elbert.nextep.extra.SWAP_ANIMATION_DURATION_MS"
     const val EXTRA_LANGUAGE_TAG = "com.elbert.nextep.extra.LANGUAGE_TAG"
     const val MIN_SWAP_ANIMATION_DURATION_MS = 100
@@ -114,6 +116,7 @@ class WorkspaceConfigReceiver : BroadcastReceiver() {
                 putBoolean(WorkspaceConfigContract.EXTRA_RETURN_AFTER_SHARING_ENABLED, settings.returnAfterSharingEnabled)
                 putBoolean(WorkspaceConfigContract.EXTRA_AUTO_MINIMIZE_MAIN, settings.autoMinimizeMainOnTopAppSwitch)
                 putBoolean(WorkspaceConfigContract.EXTRA_NAVIGATION_BUTTONS_ENABLED, settings.navigationButtonsEnabled)
+                putBoolean(WorkspaceConfigContract.EXTRA_EXIT_ON_LOCK, settings.exitOnLock)
                 putInt(WorkspaceConfigContract.EXTRA_SWAP_ANIMATION_DURATION_MS, settings.swapAnimationDurationMs)
                 putString(WorkspaceConfigContract.EXTRA_LANGUAGE_TAG, AppLanguage.selectedTag(context))
                 putStringArrayList(
@@ -270,6 +273,9 @@ object WorkspaceConfigClient {
             navigationButtonsEnabled = extras?.getBoolean(
                 WorkspaceConfigContract.EXTRA_NAVIGATION_BUTTONS_ENABLED, false,
             ) ?: false,
+            exitOnLock = extras.getBoolean(
+                WorkspaceConfigContract.EXTRA_EXIT_ON_LOCK, false,
+            ),
             swapAnimationDurationMs = WorkspaceConfigContract.normalizeSwapAnimationDurationMs(
                 extras.getInt(WorkspaceConfigContract.EXTRA_SWAP_ANIMATION_DURATION_MS,
                     WorkspaceConfigContract.DEFAULT_SWAP_ANIMATION_DURATION_MS),

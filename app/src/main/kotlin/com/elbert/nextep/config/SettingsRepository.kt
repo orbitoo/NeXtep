@@ -26,6 +26,7 @@ class SettingsRepository(private val context: Context) {
         val fourFingerGestureBlacklist: Set<String> = emptySet(),
         val blockSystemDragShareEnabled: Boolean = WorkspaceConfigContract.DEFAULT_BLOCK_SYSTEM_DRAG_SHARE_ENABLED,
         val returnAfterSharingEnabled: Boolean = WorkspaceConfigContract.DEFAULT_RETURN_AFTER_SHARING_ENABLED,
+        val exitOnLock: Boolean = false,
     )
 
     fun topBarSettings(): TopBarSettings = TopBarSettings(
@@ -61,6 +62,7 @@ class SettingsRepository(private val context: Context) {
             WorkspaceConfigContract.DEFAULT_BLOCK_SYSTEM_DRAG_SHARE_ENABLED),
         returnAfterSharingEnabled = preferences.getBoolean(KEY_RETURN_AFTER_SHARING_ENABLED,
             WorkspaceConfigContract.DEFAULT_RETURN_AFTER_SHARING_ENABLED),
+        exitOnLock = preferences.getBoolean(KEY_EXIT_ON_LOCK, false),
     )
 
     fun setFourFingerGestureEnabled(enabled: Boolean) {
@@ -112,6 +114,11 @@ class SettingsRepository(private val context: Context) {
 
     fun setReturnAfterSharingEnabled(enabled: Boolean) {
         preferences.edit().putBoolean(KEY_RETURN_AFTER_SHARING_ENABLED, enabled).apply()
+        notifyTopContentChanged()
+    }
+
+    fun setExitOnLock(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_EXIT_ON_LOCK, enabled).apply()
         notifyTopContentChanged()
     }
 
@@ -198,6 +205,7 @@ class SettingsRepository(private val context: Context) {
         const val KEY_FOUR_FINGER_GESTURE_BLACKLIST = "four_finger_gesture_blacklist"
         const val KEY_BLOCK_SYSTEM_DRAG_SHARE_ENABLED = "block_system_drag_share_enabled"
         const val KEY_RETURN_AFTER_SHARING_ENABLED = "return_after_sharing_enabled"
+        const val KEY_EXIT_ON_LOCK = "exit_on_lock"
         const val DEFAULT_TOP_TITLE = ""
         const val COMPONENT_SEPARATOR = "\n"
         const val MAX_TOP_APPS = 36
