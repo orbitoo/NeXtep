@@ -2,6 +2,8 @@ package com.elbert.nextep.systemui
 
 import android.app.Application
 import android.app.Instrumentation
+import com.elbert.nextep.framework.TaskInfoCompat
+import com.elbert.nextep.framework.TaskSurfaceCompat
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.xposed.HookGuard
 import io.github.libxposed.api.XposedModule
@@ -11,6 +13,7 @@ import com.elbert.nextep.safety.FeatureGate
 
 object SystemUiHook {
     private data class StartupCandidate(val className: String, val methodName: String)
+    private val taskChangeFilter = WorkspaceTaskChangeFilter()
 
     private val touchRootCandidates = listOf(
         "com.android.systemui.statusbar.window.StatusBarWindowView",
@@ -38,19 +41,31 @@ object SystemUiHook {
                 module.hook(method).intercept(object : io.github.libxposed.api.XposedInterface.Hooker {
                     override fun intercept(chain: io.github.libxposed.api.XposedInterface.Chain): Any? {
                         val info = chain.args.firstOrNull() as? android.app.ActivityManager.RunningTaskInfo
+                        var shouldRefresh = info != null
                         if (info != null) HookGuard.run("task_surface_ownership_update") {
                             if (method.name == "onTaskVanished") {
-                                com.elbert.nextep.framework.TaskSurfaceCompat.forgetTaskSurface(info.taskId)
+                                TaskSurfaceCompat.forgetTaskSurface(info.taskId)
+                                shouldRefresh = taskChangeFilter.onTaskVanished(info.taskId)
                             } else {
-                                com.elbert.nextep.framework.TaskSurfaceCompat.observeTaskInfo(
+                                val state = TaskSurfaceCompat.observeTaskInfo(
                                     info, if (method.name == "onTaskAppeared") chain.args.getOrNull(1) else null,
                                 )
+                                val signature = state?.let { toTaskSignature(info, it) }
+                                if (method.name == "onTaskAppeared") {
+                                    shouldRefresh = taskChangeFilter.onTaskAppeared(info.taskId, signature)
+                                } else {
+                                    val reason = taskChangeFilter.onTaskInfoChangedReason(info.taskId, signature)
+                                    shouldRefresh = reason != null
+                                    if (reason != null) {
+                                        NeXtepLog.debug("workspace_task_refresh", "taskId=${info.taskId} $reason")
+                                    }
+                                }
                             }
                         }
                         val result = chain.proceed()
-                        // Coalesce callback bursts on the main looper; an idle
-                        // workspace no longer needs constant fast Binder polling.
-                        if (info != null) HookGuard.run("workspace_task_refresh") { SystemUiRuntime.onTasksChanged() }
+                        // Coalesce structural callback bursts on the main looper; non-layout task
+                        // info updates must not keep resetting idle refresh backoff.
+                        if (shouldRefresh) HookGuard.run("workspace_task_refresh") { SystemUiRuntime.onTasksChanged() }
                         return result
                     }
                 })
@@ -181,4 +196,24 @@ object SystemUiHook {
             )
         }
     }
+
+    private fun toTaskSignature(
+        info: android.app.ActivityManager.RunningTaskInfo,
+        state: TaskInfoCompat.WindowState,
+    ) = WorkspaceTaskChangeFilter.TaskSignature(
+        displayId = state.displayId,
+        boundsLeft = state.bounds.left,
+        boundsTop = state.bounds.top,
+        boundsRight = state.bounds.right,
+        boundsBottom = state.bounds.bottom,
+        windowingMode = state.windowingMode,
+        resizeMode = state.resizeMode,
+        densityDpi = state.densityDpi,
+        tokenIdentity = TaskInfoCompat.readTokenIdentity(state.token),
+        vendorWindowed = state.vendorWindowed,
+        isVisible = state.isVisible,
+        isFocused = TaskInfoCompat.readIsFocused(info),
+        activityType = state.activityType,
+        topComponent = (info.topActivity ?: info.baseActivity)?.flattenToShortString(),
+    )
 }
