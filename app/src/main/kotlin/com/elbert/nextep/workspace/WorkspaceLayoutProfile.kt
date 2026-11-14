@@ -2,6 +2,7 @@ package com.elbert.nextep.workspace
 
 import com.elbert.nextep.display.SlotGeometry
 import com.elbert.nextep.display.WORKSPACE_SLOT_COUNT
+import com.elbert.nextep.display.WorkspaceSlotCount
 
 /** One recorded layout shared by panels, main-task fitting and all preview displays. */
 data class WorkspaceLayoutProfile(
@@ -28,11 +29,12 @@ data class WorkspaceLayoutProfile(
     // buffer into a slot; do not crop navigation pixels off an already laid-out app.
     val source = Source(0, 0, canvas.width, canvas.height)
     val slots: List<Slot> = run {
-        val height = (geometry.sidebarLogicalHeight - gapPixels * (WORKSPACE_SLOT_COUNT - 1))
-            .coerceAtLeast(WORKSPACE_SLOT_COUNT)
-        val base = height / WORKSPACE_SLOT_COUNT
-        val remainder = height % WORKSPACE_SLOT_COUNT
-        List(WORKSPACE_SLOT_COUNT) { index -> Slot(geometry.sidebarWidth - gapPixels,
+        val count = geometry.slotCount
+        val height = (geometry.sidebarLogicalHeight - gapPixels * (count - 1))
+            .coerceAtLeast(count)
+        val base = height / count
+        val remainder = height % count
+        List(count) { index -> Slot(geometry.sidebarWidth - gapPixels,
             base + if (index < remainder) 1 else 0,
             index * (base + gapPixels) + minOf(index, remainder)) }
     }
@@ -52,36 +54,76 @@ data class WorkspaceLayoutProfile(
             (height - source.height * scale) / 2f - source.top * scale)
     }
 
-    fun encode(): String = listOf("5", geometry.screenWidth, geometry.screenHeight,
-        geometry.topHeight, geometry.sidebarWidth, densityDpi, gapPixels,
-        geometry.navigationInsets.left, geometry.navigationInsets.top,
-        geometry.navigationInsets.right, geometry.navigationInsets.bottom,
-        geometry.contentWidth, geometry.contentHeight, geometry.contentScale,
-        canvas.width, canvas.height,
-        source.left, source.top, source.right, source.bottom,
-        *slots.flatMap { listOf(it.width, it.height, it.top) }.toTypedArray(),
-        geometry.displayRotation).joinToString(",")
+    fun encode(): String {
+        val base = listOf(
+            if (geometry.slotCount == WORKSPACE_SLOT_COUNT) "5" else "6",
+            geometry.screenWidth, geometry.screenHeight,
+            geometry.topHeight, geometry.sidebarWidth, densityDpi, gapPixels,
+            geometry.navigationInsets.left, geometry.navigationInsets.top,
+            geometry.navigationInsets.right, geometry.navigationInsets.bottom,
+            geometry.contentWidth, geometry.contentHeight, geometry.contentScale,
+            canvas.width, canvas.height,
+            source.left, source.top, source.right, source.bottom,
+            *slots.flatMap { listOf(it.width, it.height, it.top) }.toTypedArray(),
+            geometry.displayRotation,
+        )
+        val full = if (geometry.slotCount == WORKSPACE_SLOT_COUNT) base else base + geometry.slotCount
+        return full.joinToString(",")
+    }
 
     companion object {
-        fun create(width: Int, height: Int, densityDpi: Int, insets: WorkspaceNavigationInsets,
-            displayRotation: Int = 0) =
-            WorkspaceLayoutProfile(WorkspaceGeometry.forDisplay(width, height, density = densityDpi / 160f,
-                navigationInsets = insets, displayRotation = displayRotation),
-                densityDpi, (densityDpi / 160f).toInt().coerceAtLeast(1))
+        fun create(
+            width: Int,
+            height: Int,
+            densityDpi: Int,
+            insets: WorkspaceNavigationInsets,
+            displayRotation: Int = 0,
+            slotCount: Int = WORKSPACE_SLOT_COUNT,
+        ) = WorkspaceLayoutProfile(
+            WorkspaceGeometry.forDisplay(
+                width,
+                height,
+                density = densityDpi / 160f,
+                navigationInsets = insets,
+                displayRotation = displayRotation,
+                slotCount = slotCount,
+            ),
+            densityDpi,
+            (densityDpi / 160f).toInt().coerceAtLeast(1),
+        )
 
         fun decode(encoded: String?): WorkspaceLayoutProfile? = runCatching {
             val p = encoded?.split(',') ?: return@runCatching null
             val version = p.firstOrNull() ?: return@runCatching null
-            if (version !in setOf("2", "3", "4", "5") ||
-                p.size != (if (version == "5") 30 else 29)) return@runCatching null
-            val profile = WorkspaceLayoutProfile(WorkspaceGeometry(p[1].toInt(), p[2].toInt(),
-                p[3].toInt(), p[4].toInt(), SidebarSide.RIGHT,
-                WorkspaceNavigationInsets(p[7].toInt(), p[8].toInt(), p[9].toInt(), p[10].toInt()),
-                displayRotation = if (version == "5") p[29].toInt() else 0),
-                p[5].toInt(), p[6].toInt())
+            val slotCount = when (version) {
+                "2", "3", "4", "5" -> WORKSPACE_SLOT_COUNT
+                "6" -> p.lastOrNull()?.toInt()?.takeIf(WorkspaceSlotCount::isSupported) ?: return@runCatching null
+                else -> return@runCatching null
+            }
+            val expectedSize = when (version) {
+                "6" -> 22 + 3 * slotCount
+                "5" -> 30
+                else -> 29
+            }
+            if (p.size != expectedSize) return@runCatching null
+            val rotationIndex = 20 + 3 * slotCount
+            val profile = WorkspaceLayoutProfile(
+                WorkspaceGeometry(
+                    p[1].toInt(),
+                    p[2].toInt(),
+                    p[3].toInt(),
+                    p[4].toInt(),
+                    SidebarSide.RIGHT,
+                    WorkspaceNavigationInsets(p[7].toInt(), p[8].toInt(), p[9].toInt(), p[10].toInt()),
+                    displayRotation = if (version == "5" || version == "6") p[rotationIndex].toInt() else 0,
+                    slotCount = slotCount,
+                ),
+                p[5].toInt(),
+                p[6].toInt(),
+            )
             val expected = profile.encode().split(',').toMutableList()
             expected[0] = p[0]
-            if (version != "5") expected.removeAt(29)
+            if (version != "5" && version != "6") expected.removeAt(29)
             if (p[0] == "2") {
                 // Migrate the old full-screen canvas using its recorded insets.
                 // This requires no WindowMetrics query or fresh calibration.
@@ -93,7 +135,7 @@ data class WorkspaceLayoutProfile(
                 expected[19] = oldCanvas.height.toString()
             }
             if (expected.joinToString(",") != encoded) return@runCatching null
-            if (version == "4" || version == "5") profile else {
+            if (version == "4" || version == "5" || version == "6") profile else {
                 // Recalculate the old slot proportions once using the already
                 // recorded display and navigation mode; never resample metrics.
                 create(profile.geometry.screenWidth, profile.geometry.screenHeight,

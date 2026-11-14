@@ -1,6 +1,7 @@
 package com.elbert.nextep.workspace
 
 import com.elbert.nextep.display.WORKSPACE_SLOT_COUNT
+import com.elbert.nextep.display.WorkspaceSlotCount
 import kotlin.math.roundToInt
 
 data class WorkspaceNavigationInsets(
@@ -18,6 +19,7 @@ data class WorkspaceGeometry(
     val sidebarSide: SidebarSide,
     val navigationInsets: WorkspaceNavigationInsets = WorkspaceNavigationInsets(),
     val displayRotation: Int = 0,
+    val slotCount: Int = WORKSPACE_SLOT_COUNT,
 ) {
     val isLandscape: Boolean get() = screenWidth > screenHeight
     // Surface rotations are quarter turns from the phone's natural portrait axes.
@@ -51,6 +53,7 @@ data class WorkspaceGeometry(
         require(availableWidth > 1 && availableHeight > 1)
         require(topHeight in 1 until (if (isLandscape) availableWidth else availableHeight))
         require(sidebarWidth in 1 until (if (isLandscape) availableHeight else availableWidth))
+        require(WorkspaceSlotCount.isSupported(slotCount))
     }
 
     // Control-strip thickness and slot-rail thickness use portrait logical axes.
@@ -139,9 +142,11 @@ data class WorkspaceGeometry(
             density: Float,
             navigationInsets: WorkspaceNavigationInsets = WorkspaceNavigationInsets(),
             displayRotation: Int = 0,
+            slotCount: Int = WORKSPACE_SLOT_COUNT,
         ): WorkspaceGeometry {
             require(screenWidth > 1 && screenHeight > 1) { "Display dimensions must be usable" }
             require(density.isFinite() && density > 0f) { "Display density must be positive and finite" }
+            val normalizedSlotCount = WorkspaceSlotCount.normalize(slotCount)
             val left = navigationInsets.left.coerceIn(0, screenWidth - 2)
             val top = navigationInsets.top.coerceIn(0, screenHeight - 2)
             val safeInsets = WorkspaceNavigationInsets(
@@ -159,10 +164,15 @@ data class WorkspaceGeometry(
             // content's long side and r = shortSide/longSide, their short sides
             // are H*r and (H-(N-1)*gap)*r/N. Including the rail divider, they
             // must sum to shortSide. Independent strip/rail fractions leave bands.
-            val count = WORKSPACE_SLOT_COUNT
-            val contentLongSide = (count * (shortSide - gap).toDouble() * longSide / shortSide +
-                (count - 1) * gap) / (count + 1)
-            val controlThickness = (longSide - contentLongSide).roundToInt().coerceIn(1, longSide - 1)
+            val contentLongSide = (normalizedSlotCount * (shortSide - gap).toDouble() * longSide / shortSide +
+                (normalizedSlotCount - 1) * gap) / (normalizedSlotCount + 1)
+            val rawControlThickness = (longSide - contentLongSide).roundToInt().coerceIn(1, longSide - 1)
+            val minControlThickness = if (normalizedSlotCount >= 5) {
+                minOf((118f * density).roundToInt(), longSide / 2).coerceAtLeast(1)
+            } else {
+                1
+            }
+            val controlThickness = maxOf(rawControlThickness, minControlThickness).coerceIn(1, longSide - 1)
             val mainShortSide = (shortSide.toDouble() * (longSide - controlThickness) / longSide)
                 .roundToInt().coerceIn(1, shortSide - 1)
             return WorkspaceGeometry(
@@ -173,6 +183,7 @@ data class WorkspaceGeometry(
                 sidebarSide = sidebarSide,
                 navigationInsets = safeInsets,
                 displayRotation = displayRotation,
+                slotCount = normalizedSlotCount,
             )
         }
     }
