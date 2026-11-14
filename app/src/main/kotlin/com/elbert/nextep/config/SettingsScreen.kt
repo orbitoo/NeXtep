@@ -234,6 +234,36 @@ object SettingsScreen {
                         settings.exitOnLock,
                         repository::setExitOnLock,
                     ), matchWidth())
+                    val autoHibernateTimeoutDivider = settingDivider(activity)
+                    val autoHibernateTimeoutRow = settingSliderRow(
+                        activity,
+                        activity.getString(R.string.slot_auto_hibernate_timeout_title),
+                        activity.getString(R.string.slot_auto_hibernate_timeout_summary),
+                        settings.slotAutoHibernateTimeoutSeconds,
+                        WorkspaceConfigContract.MIN_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+                        WorkspaceConfigContract.MAX_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+                        WorkspaceConfigContract.SLOT_AUTO_HIBERNATE_TIMEOUT_STEP_SECONDS,
+                        { activity.getString(R.string.slot_auto_hibernate_timeout_value, it) },
+                        repository::setSlotAutoHibernateTimeoutSeconds,
+                    )
+                    fun updateAutoHibernateTimeoutVisibility(enabled: Boolean) {
+                        val visibility = if (enabled) View.VISIBLE else View.GONE
+                        autoHibernateTimeoutDivider.visibility = visibility
+                        autoHibernateTimeoutRow.visibility = visibility
+                    }
+                    updateAutoHibernateTimeoutVisibility(settings.slotAutoHibernateEnabled)
+                    addView(settingDivider(activity))
+                    addView(settingSwitchRow(
+                        activity,
+                        activity.getString(R.string.slot_auto_hibernate_title),
+                        activity.getString(R.string.slot_auto_hibernate_summary),
+                        settings.slotAutoHibernateEnabled,
+                    ) { enabled ->
+                        repository.setSlotAutoHibernateEnabled(enabled)
+                        updateAutoHibernateTimeoutVisibility(enabled)
+                    }, matchWidth())
+                    addView(autoHibernateTimeoutDivider)
+                    addView(autoHibernateTimeoutRow, matchWidth())
                     addView(settingDivider(activity))
                     addView(settingSliderRow(
                         activity,
