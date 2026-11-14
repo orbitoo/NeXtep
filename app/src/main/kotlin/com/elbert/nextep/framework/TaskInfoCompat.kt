@@ -63,9 +63,13 @@ object TaskInfoCompat {
         // PLK110 16.0.10.500: OplusExtraConfiguration.getScenario(), with FlexibleWindowManager
         // LAUNCH_SCENARIO_FLEXIBLE=1 and LAUNCH_SCENARIO_CANVAS=2. Missing OEM fields on
         // other ROMs leave the standard windowing-mode checks in charge.
+        val taskId = (info as? ActivityManager.RunningTaskInfo)?.taskId
+            ?: readInt(info, listOf("taskId", "mTaskId"), listOf("getTaskId"))
+            ?: -1
         val extra = readMember(configuration, listOf("mOplusExtraConfiguration"), emptyList())
         val scenario = extra?.let { readInt(it, listOf("mScenario"), listOf("getScenario")) }
-        val vendorWindowed = scenario == 1 || scenario == 2
+        val vendorWindowed = scenario == 1 || scenario == 2 ||
+            HyperOsFreeformCompat.isTrackedFreeformTask(taskId)
         return WindowState(displayId, bounds, windowingMode, resizeMode, densityDpi, token, vendorWindowed)
     }
 
