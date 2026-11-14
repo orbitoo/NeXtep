@@ -125,7 +125,7 @@ class SlotTaskCoordinator(
     }
 
     private fun hasPendingRecovery(): Boolean = promotedRecoveryTask != null || slotRecords.any {
-        it.pendingComponent != null || it.migrationRecoveryTask != null || it.mismatchSince != 0L
+        it.pendingComponent != null || shouldRecoverMigratedTask(it) || it.mismatchSince != 0L
     } || slots.any { it.isSuspended() }
 
     private fun scheduleReconciliation(delayMs: Long) {
@@ -194,9 +194,7 @@ class SlotTaskCoordinator(
         slotRecords.forEach { record ->
             record.pendingComponent = null
             record.pendingAttempts = 0
-            record.migrationRecoveryTask = null
-            record.migrationRecoveryDeadline = 0L
-            record.migrationRecoveryAttempts = 0
+            clearMigrationRecovery(record)
         }
         NeXtepLog.info("slot_coordinator", "Deactivated retained=${retainedTaskDescription()}")
     }
@@ -1098,9 +1096,7 @@ class SlotTaskCoordinator(
             val rollbackErrors = mutableListOf<Throwable>()
             record.retainedTaskId = null
             record.originalLayout = null
-            record.migrationRecoveryTask = null
-            record.migrationRecoveryDeadline = 0L
-            record.migrationRecoveryAttempts = 0
+            clearMigrationRecovery(record)
             if (preparedForMove) {
                 runCatching {
                     if (movedToSlot) {
@@ -1259,9 +1255,7 @@ class SlotTaskCoordinator(
             }
             record.retainedTaskId = occupied.taskId
             record.originalLayout = slotOriginalLayout
-            record.migrationRecoveryTask = null
-            record.migrationRecoveryDeadline = 0L
-            record.migrationRecoveryAttempts = 0
+            clearMigrationRecovery(record)
             if (rollbackErrors.isEmpty()) {
                 setState(slotIndex, occupied, "swap rolled back")
             } else {
@@ -1507,6 +1501,16 @@ class SlotTaskCoordinator(
                     )
                 }
             }
+            if (isMigrationRecoveryExpired(
+                    hasTask = record.migrationRecoveryTask != null,
+                    attempts = record.migrationRecoveryAttempts,
+                    hasOccupiedDisplayTask = displayTask != null,
+                    nowMs = SystemClock.uptimeMillis(),
+                    deadlineMs = record.migrationRecoveryDeadline,
+                )
+            ) {
+                clearMigrationRecovery(record)
+            }
         }
         // The steady pass already owns a complete snapshot. Only the branch
         // above that changes a main task's native layout needs a fresh query.
@@ -1520,10 +1524,18 @@ class SlotTaskCoordinator(
             }
     }
 
-    private fun shouldRecoverMigratedTask(record: SlotRecord): Boolean =
-        record.migrationRecoveryTask != null &&
-            record.migrationRecoveryAttempts < MAX_MIGRATION_RECOVERY_ATTEMPTS &&
-            SystemClock.uptimeMillis() <= record.migrationRecoveryDeadline
+    private fun shouldRecoverMigratedTask(record: SlotRecord): Boolean = isMigrationRecoveryActive(
+        hasTask = record.migrationRecoveryTask != null,
+        attempts = record.migrationRecoveryAttempts,
+        nowMs = SystemClock.uptimeMillis(),
+        deadlineMs = record.migrationRecoveryDeadline,
+    )
+
+    private fun clearMigrationRecovery(record: SlotRecord) {
+        record.migrationRecoveryTask = null
+        record.migrationRecoveryDeadline = 0L
+        record.migrationRecoveryAttempts = 0
+    }
 
     private fun schedulePromotedTaskRecovery() {
         postPromotedRecovery(PROMOTED_RECOVERY_DELAY_MS)
@@ -1983,7 +1995,7 @@ class SlotTaskCoordinator(
         }
     }
 
-    private companion object {
+    internal companion object {
         const val SETTLE_DELAY_MS = 700L
         const val MAIN_LAUNCH_POLL_MS = 200L
         const val MAX_MAIN_LAUNCH_POLLS = 3
@@ -2001,5 +2013,21 @@ class SlotTaskCoordinator(
         const val MAX_MIGRATION_RECOVERY_ATTEMPTS = 1
         const val PROMOTED_RECOVERY_DELAY_MS = 900L
         const val PROMOTED_RECOVERY_POLL_MS = 350L
+
+        internal fun isMigrationRecoveryActive(
+            hasTask: Boolean,
+            attempts: Int,
+            nowMs: Long,
+            deadlineMs: Long,
+        ): Boolean = hasTask && attempts < MAX_MIGRATION_RECOVERY_ATTEMPTS && nowMs <= deadlineMs
+
+        internal fun isMigrationRecoveryExpired(
+            hasTask: Boolean,
+            attempts: Int,
+            hasOccupiedDisplayTask: Boolean,
+            nowMs: Long,
+            deadlineMs: Long,
+        ): Boolean = hasTask && !isMigrationRecoveryActive(hasTask, attempts, nowMs, deadlineMs) &&
+            (hasOccupiedDisplayTask || nowMs > deadlineMs)
     }
 }
