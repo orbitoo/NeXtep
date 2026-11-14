@@ -128,8 +128,15 @@ object ColorOsLauncherHook {
             )
             onPostResume.isAccessible = true
             dispatchTouchEvent.isAccessible = true
-            module.hook(onPostResume).intercept(LauncherLifecycleHooker(module))
-            module.hook(dispatchTouchEvent).intercept(LauncherTouchHooker())
+            val touchHooker = LauncherTouchHooker()
+            // Deoptimize Activity methods so speed-AOT launcher overrides cannot
+            // inline super.dispatchTouchEvent and bypass our coordinate hook.
+            runCatching { module.deoptimize(onPostResume) }
+            runCatching { module.deoptimize(dispatchTouchEvent) }
+            module.hook(onPostResume).intercept(
+                LauncherLifecycleHooker(module, touchHooker, dispatchTouchEvent),
+            )
+            module.hook(dispatchTouchEvent).intercept(touchHooker)
             if (packageName in TriggerBroadcastContract.ASSISTANT_SCREEN_PACKAGES) {
                 installAssistantWindowHooks(module)
             }
@@ -236,8 +243,12 @@ class LauncherStartActivityHooker : XposedInterface.Hooker {
     }
 }
 
-class LauncherLifecycleHooker(private val module: XposedModule) : XposedInterface.Hooker {
-    private val configurationMethods = mutableSetOf<Method>()
+class LauncherLifecycleHooker(
+    private val module: XposedModule,
+    private val touchHooker: LauncherTouchHooker,
+    baseDispatchTouchEvent: Method,
+) : XposedInterface.Hooker {
+    private val hookedMethods = mutableSetOf(baseDispatchTouchEvent)
 
     override fun intercept(chain: XposedInterface.Chain): Any? {
         val activity = chain.thisObject as? Activity
@@ -245,6 +256,9 @@ class LauncherLifecycleHooker(private val module: XposedModule) : XposedInterfac
         if (activity != null) {
             HookGuard.run("launcher_configuration_install") {
                 installConfigurationHook(activity)
+            }
+            HookGuard.run("launcher_touch_install") {
+                installTouchHook(activity)
             }
             HookGuard.run("launcher_lifecycle") {
                 LauncherRuntime.onHomeResumed(activity)
@@ -254,39 +268,73 @@ class LauncherLifecycleHooker(private val module: XposedModule) : XposedInterfac
     }
 
     private fun installConfigurationHook(activity: Activity) {
-        if (!LauncherPackageResolver.isWorkspaceSurface(activity)) return
         // ColorOS changes its grid/device profile before calling Activity.super.
         // Resolve the actual override, including inherited OEM implementations,
         // before onHomeResumed can apply our first transform to this Activity.
-        val method = activity.javaClass.getMethod("onConfigurationChanged", Configuration::class.java)
-        if (method in configurationMethods) return
-        method.isAccessible = true
-        module.hook(method).intercept(object : XposedInterface.Hooker {
-            override fun intercept(chain: XposedInterface.Chain): Any? {
-                (chain.thisObject as? Activity)?.let { target ->
-                    HookGuard.run("launcher_configuration") {
-                        LauncherTransformController.prepareForConfigurationChange(target)
+        installActivityOverrideHook(
+            activity = activity,
+            methodName = "onConfigurationChanged",
+            paramTypes = arrayOf(Configuration::class.java),
+            deoptimize = false,
+            hooker = object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    (chain.thisObject as? Activity)?.let { target ->
+                        HookGuard.run("launcher_configuration") {
+                            LauncherTransformController.prepareForConfigurationChange(target)
+                        }
                     }
+                    return chain.proceed()
                 }
-                return chain.proceed()
-            }
-        })
-        configurationMethods += method
+            },
+        )
+    }
+
+    private fun installTouchHook(activity: Activity) {
+        // HyperOS speed-AOT launcher subclasses inline super.dispatchTouchEvent,
+        // so deoptimize and hook the concrete Activity subclass override too.
+        installActivityOverrideHook(
+            activity = activity,
+            methodName = "dispatchTouchEvent",
+            paramTypes = arrayOf(MotionEvent::class.java),
+            deoptimize = true,
+            hooker = touchHooker,
+        )
+    }
+
+    private fun installActivityOverrideHook(
+        activity: Activity,
+        methodName: String,
+        paramTypes: Array<Class<*>>,
+        deoptimize: Boolean,
+        hooker: XposedInterface.Hooker,
+    ) {
+        if (!LauncherPackageResolver.isWorkspaceSurface(activity)) return
+        val method = activity.javaClass.getMethod(methodName, *paramTypes)
+        if (!hookedMethods.add(method)) return
+        method.isAccessible = true
+        if (deoptimize) {
+            runCatching { module.deoptimize(method) }
+        }
+        module.hook(method).intercept(hooker)
     }
 }
 
 class LauncherTouchHooker : XposedInterface.Hooker {
+    private val dispatchDepth = ThreadLocal.withInitial { 0 }
+
     override fun intercept(chain: XposedInterface.Chain): Any? {
         val activity = chain.thisObject as? Activity
         if (activity != null && LauncherPackageResolver.isAssistantScreen(activity)) {
             return chain.proceed()
         }
-        val event = chain.getArg(0) as? MotionEvent
-        val transform = LauncherTransformController.mapToContent(event)
-        return try {
-            chain.proceed()
-        } finally {
-            LauncherTransformController.mapToScreen(event, transform)
+        return LauncherWindowPolicy.runOutermostDispatch(dispatchDepth, chain::proceed) {
+            val event = chain.getArg(0) as? MotionEvent
+            val transform = LauncherTransformController.mapToContent(event)
+            try {
+                chain.proceed()
+            } finally {
+                LauncherTransformController.mapToScreen(event, transform)
+            }
         }
     }
 }

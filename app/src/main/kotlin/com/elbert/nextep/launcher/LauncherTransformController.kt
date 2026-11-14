@@ -485,15 +485,13 @@ object LauncherTransformController {
     }
 
     private fun isAssistantPanel(view: View): Boolean {
-        if (view.display?.displayId != Display.DEFAULT_DISPLAY) return false
         val params = view.layoutParams as? WindowManager.LayoutParams ?: return false
-        // The ColorOS 17 panel is a TYPE_APPLICATION window attached to Launcher's
-        // HOME token, with the package itself as its title. HOME's decor transform
-        // does not affect that separate window. Profile/settings BASE_APPLICATION
-        // windows have their own tasks and are fitted by SystemUI instead.
-        return params.type >= WindowManager.LayoutParams.FIRST_SYSTEM_WINDOW ||
-            (params.type == WindowManager.LayoutParams.TYPE_APPLICATION &&
-                params.title?.toString() == view.context.packageName)
+        return LauncherWindowPolicy.isAssistantPanelWindow(
+            displayId = view.display?.displayId,
+            type = params.type,
+            title = params.title?.toString(),
+            packageName = view.context.packageName,
+        )
     }
 
     private val REAPPLY_DELAYS_MS = longArrayOf(0L, 120L, 300L, 600L, 1_200L, 2_000L)
