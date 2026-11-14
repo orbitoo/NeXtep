@@ -143,8 +143,8 @@ class SlotTaskCoordinator(
     }
 
     init {
-        require(slots.size == WORKSPACE_SLOT_COUNT) {
-            "P6 requires exactly $WORKSPACE_SLOT_COUNT slots"
+        require(slots.size in WorkspaceSlotCount.SUPPORTED) {
+            "P6 requires ${WorkspaceSlotCount.SUPPORTED} slots, got ${slots.size}"
         }
         slots.forEach { slot ->
             slot.setListener(this)

@@ -130,7 +130,12 @@ class VirtualDisplaySlot(
 
     fun activate() {
         active = true
-        val textureView = if (freshSurfaceRequired) {
+        val textureView = if (shouldReplaceTextureOnActivate(
+                freshSurfaceRequired = freshSurfaceRequired,
+                hasVirtualDisplay = virtualDisplay != null,
+                textureAvailable = view.textureView.isAvailable,
+            )
+        ) {
             freshSurfaceRequired = false
             surfaceGeneration += 1
             view.replaceTextureView(this).also {
@@ -235,12 +240,11 @@ class VirtualDisplaySlot(
     }
 
     override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
-        if (!active || suspended) return
-        if (width <= 0 || height <= 0) return
-        val profile = checkNotNull(layoutProfile) { "Recorded layout must precede slot activation" }
+        if (!shouldRestorePreviewSurfaceOnSizeChanged(width, height, layoutProfile != null)) return
+        val profile = checkNotNull(layoutProfile)
         val geometry = profile.canvas
         // TextureView resets the producer buffer to its view size during layout.
-        // Restore the recorded canvas even when the VirtualDisplay did not resize.
+        // Restore the recorded canvas even when inactive, suspended, or unchanged in VirtualDisplay.
         texture.setDefaultBufferSize(geometry.width, geometry.height)
         val transform = profile.previewTransform(width, height)
         view.textureView.setTransform(Matrix().apply {
@@ -248,6 +252,7 @@ class VirtualDisplaySlot(
             postTranslate(transform.x, transform.y)
         })
         view.updateHibernatePreviewTransform()
+        if (!active || suspended) return
         // Reuse the surface when dimensions settle or only the sidebar's position changes.
         if (virtualDisplay != null && geometry == activeGeometry) {
             return
@@ -358,7 +363,19 @@ class VirtualDisplaySlot(
         listener?.onDisplayReleased(index, releasedDisplayId, reason)
     }
 
-    private companion object {
-        const val WAKE_COVER_FALLBACK_MS = 250L
+    companion object {
+        private const val WAKE_COVER_FALLBACK_MS = 250L
+
+        internal fun shouldReplaceTextureOnActivate(
+            freshSurfaceRequired: Boolean,
+            hasVirtualDisplay: Boolean,
+            textureAvailable: Boolean,
+        ): Boolean = freshSurfaceRequired || (!hasVirtualDisplay && textureAvailable)
+
+        internal fun shouldRestorePreviewSurfaceOnSizeChanged(
+            width: Int,
+            height: Int,
+            hasLayoutProfile: Boolean,
+        ): Boolean = width > 0 && height > 0 && hasLayoutProfile
     }
 }

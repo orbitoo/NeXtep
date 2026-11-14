@@ -9,6 +9,8 @@ import android.os.SystemClock
 import android.view.Display
 import android.view.WindowInsets
 import android.view.WindowManager
+import com.elbert.nextep.display.WORKSPACE_SLOT_COUNT
+import com.elbert.nextep.display.WorkspaceSlotCount
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.workspace.SidebarSide
 import com.elbert.nextep.workspace.WorkspaceGeometry
@@ -56,6 +58,9 @@ internal class WorkspaceViewport(
     }.onFailure { NeXtepLog.warn("workspace_viewport", "Viewport storage unavailable", it) }.getOrNull()
     private val handler = Handler(Looper.getMainLooper())
     private var navigationButtonsEnabled = preferences?.getBoolean(MODE_KEY, false) ?: false
+    private var slotCount = WorkspaceSlotCount.normalize(
+        preferences?.getInt(SLOT_COUNT_KEY, WORKSPACE_SLOT_COUNT) ?: WORKSPACE_SLOT_COUNT,
+    )
     private var cached: Snapshot? = null
     private var cachedKey: String? = null
     private var profile: WorkspaceLayoutProfile? = null
@@ -91,6 +96,25 @@ internal class WorkspaceViewport(
     fun layout(refreshMetrics: Boolean = false): WorkspaceLayoutProfile {
         if (refreshMetrics || cached == null) refresh()
         return checkNotNull(profile)
+    }
+
+    fun slotCount(): Int = slotCount
+
+    fun setSlotCount(count: Int) {
+        val normalized = WorkspaceSlotCount.normalize(count)
+        if (slotCount == normalized) return
+        val previous = cached
+        slotCount = normalized
+        runCatching {
+            preferences?.edit()?.putInt(SLOT_COUNT_KEY, normalized)?.apply()
+        }.onFailure { NeXtepLog.warn("workspace_viewport", "Unable to save slot count", it) }
+        cachedKey = null
+        profile = null
+        refresh(forceMeasure = true)
+        if (previous != cached || profile != null) {
+            handler.removeCallbacks(notifyChanged)
+            handler.post(notifyChanged)
+        }
     }
 
     fun projectRotation(rotation: Int) {
@@ -151,15 +175,16 @@ internal class WorkspaceViewport(
             val g = projected.geometry
             updateSnapshot(Snapshot(g.screenWidth, g.screenHeight, previous.density,
                 g.navigationInsets, rotation),
-                "$prefix${g.screenWidth}:${g.screenHeight}:${metrics.densityDpi}:$rotation", projected)
+                "$prefix${g.screenWidth}:${g.screenHeight}:${metrics.densityDpi}:$rotation:s${g.slotCount}", projected)
             return
         }
         val key = "$prefix$width:$height:" +
-            "${metrics.densityDpi}:$rotation"
+            "${metrics.densityDpi}:$rotation:s$slotCount"
         if (cachedKey == key && cached != null) return
         val encoded = runCatching { preferences?.getString(key, null) }.getOrNull()
         val savedProfile = WorkspaceLayoutProfile.decode(encoded)?.takeIf {
             it.geometry.screenWidth == width && it.geometry.screenHeight == height &&
+                it.geometry.slotCount == slotCount &&
                 (navigationButtonsEnabled || it.geometry.navigationInsets == WorkspaceNavigationInsets())
         }?.let { it.copy(geometry = it.geometry.copy(displayRotation = rotation)) }
         if (savedProfile != null) {
@@ -200,9 +225,10 @@ internal class WorkspaceViewport(
     }
 
     private fun updateSnapshot(snapshot: Snapshot, key: String?, saved: WorkspaceLayoutProfile? = null) {
-        if (cached != snapshot || profile == null) {
+        if (cached != snapshot || profile == null || profile?.geometry?.slotCount != slotCount) {
             profile = saved ?: WorkspaceLayoutProfile.create(snapshot.width, snapshot.height,
-                (snapshot.density * 160).roundToInt(), snapshot.navigationInsets, snapshot.displayRotation)
+                (snapshot.density * 160).roundToInt(), snapshot.navigationInsets,
+                snapshot.displayRotation, slotCount)
             SystemServerWorkspaceBridge.publishLayout(context, checkNotNull(profile))
         }
         cached = snapshot
@@ -222,6 +248,7 @@ internal class WorkspaceViewport(
 
     private companion object {
         const val MODE_KEY = "navigation_buttons_enabled"
+        const val SLOT_COUNT_KEY = "workspace_slot_count"
         const val BUTTONS_PREFIX = "buttons_v1:"
         const val FULL_PREFIX = "full_v1:"
         const val MAX_PROFILES = 16
