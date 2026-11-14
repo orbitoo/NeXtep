@@ -3,6 +3,8 @@ package com.elbert.nextep.systemserver
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.graphics.Point
+import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -11,8 +13,12 @@ import android.view.InputEvent
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import com.elbert.nextep.logging.NeXtepLog
+import com.elbert.nextep.systemui.BottomCornerGestureDetector
 import com.elbert.nextep.systemui.FourFingerGestureDetector
+import com.elbert.nextep.systemui.TwoFingerSwipeGestureDetector
 import com.elbert.nextep.trigger.TriggerBroadcastContract
+import com.elbert.nextep.trigger.TriggerGesture
+import com.elbert.nextep.workspace.SystemServerWorkspaceBridge
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import java.util.concurrent.atomic.AtomicBoolean
@@ -24,9 +30,36 @@ internal object FourFingerGestureHook {
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     @Volatile private var context: Context? = null
     @Volatile private var detector: FourFingerGestureDetector? = null
+    @Volatile private var bottomCornerDetector: BottomCornerGestureDetector? = null
+    @Volatile private var twoFingerDetector: TwoFingerSwipeGestureDetector? = null
+    @Volatile private var displayWidth: Int = 0
+    @Volatile private var displayHeight: Int = 0
+    @Volatile private var displayRotation: Int = 0
     // Accessed only on PointerEventDispatcher's input looper.
     private var contactDownTime = -1L
     private var contactActive = false
+
+    @Suppress("DEPRECATION")
+    private fun refreshDisplayMetrics(systemContext: Context, displayManager: DisplayManager?) {
+        val display = displayManager?.getDisplay(Display.DEFAULT_DISPLAY)
+        val size = Point()
+        runCatching { display?.getRealSize(size) }
+        val metrics = systemContext.resources.displayMetrics
+        val width = if (size.x > 0) size.x else metrics.widthPixels
+        val height = if (size.y > 0) size.y else metrics.heightPixels
+        val rotation = display?.rotation ?: 0
+        val density = metrics.density
+        val changed = width != displayWidth || height != displayHeight || rotation != displayRotation
+        displayWidth = width
+        displayHeight = height
+        displayRotation = rotation
+        if (changed || bottomCornerDetector == null || twoFingerDetector == null) {
+            bottomCornerDetector = BottomCornerGestureDetector(density = density)
+            val statusId = systemContext.resources.getIdentifier("status_bar_height", "dimen", "android")
+            val statusHeight = if (statusId != 0) systemContext.resources.getDimension(statusId) else 0f
+            twoFingerDetector = TwoFingerSwipeGestureDetector(density = density, statusBarHeightPx = statusHeight)
+        }
+    }
 
     fun install(module: XposedModule, loader: ClassLoader) {
         val wmClass = loader.loadClass("com.android.server.wm.WindowManagerService")
@@ -48,9 +81,21 @@ internal object FourFingerGestureHook {
                         .getOrElse { reportFailure(it); return result }
                     mainHandler.post {
                         runCatching {
+                            SystemServerWorkspaceBridge.startGeometryObservation(systemContext)
                             val minimumSpan = maxOf(24f * systemContext.resources.displayMetrics.density,
                                 ViewConfiguration.get(systemContext).scaledTouchSlop * 2f)
                             detector = FourFingerGestureDetector(minimumSpan)
+                            val dm = systemContext.getSystemService(DisplayManager::class.java)
+                            refreshDisplayMetrics(systemContext, dm)
+                            dm?.registerDisplayListener(object : DisplayManager.DisplayListener {
+                                override fun onDisplayAdded(displayId: Int) = Unit
+                                override fun onDisplayRemoved(displayId: Int) = Unit
+                                override fun onDisplayChanged(displayId: Int) {
+                                    if (displayId == Display.DEFAULT_DISPLAY) {
+                                        refreshDisplayMetrics(systemContext, dm)
+                                    }
+                                }
+                            }, mainHandler)
                             context = systemContext
                             NeXtepLog.info("four_finger_gesture", "Default-display WM touch observation ready")
                         }.onFailure {
@@ -75,6 +120,47 @@ internal object FourFingerGestureHook {
                             contactActive = true
                         }
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> contactActive = false
+                    }
+                    val enabledGestures = SystemServerWorkspaceBridge.observedTriggerGestures()
+                    val cornerMatch = bottomCornerDetector?.observe(
+                        event = event,
+                        screenWidth = displayWidth,
+                        screenHeight = displayHeight,
+                        displayRotation = displayRotation,
+                        leftEnabled = TriggerGesture.BOTTOM_LEFT in enabledGestures,
+                        rightEnabled = TriggerGesture.BOTTOM_RIGHT in enabledGestures,
+                    )
+                    val twoFingerMatch = twoFingerDetector?.observe(
+                        event = event,
+                        screenWidth = displayWidth,
+                        screenHeight = displayHeight,
+                        allowed = TriggerGesture.TWO_FINGER in enabledGestures,
+                    )
+                    val matchedTrigger = cornerMatch ?: if (twoFingerMatch != null) TriggerGesture.TWO_FINGER else null
+                    if (matchedTrigger != null) {
+                        NeXtepLog.debug("trigger_gesture", "Recognized ${matchedTrigger.key}")
+                        val downTime = event.downTime
+                        val eventTime = event.eventTime
+                        val inputHandler = Handler(checkNotNull(Looper.myLooper()))
+                        mainHandler.post {
+                            runCatching {
+                                val request = Intent(TriggerBroadcastContract.ACTION_TRIGGER_GESTURE)
+                                    .setPackage(TriggerBroadcastContract.SYSTEM_UI_PACKAGE)
+                                    .putExtra(TriggerBroadcastContract.EXTRA_TRIGGER_GESTURE, matchedTrigger.key)
+                                    .putExtra(TriggerBroadcastContract.EXTRA_GESTURE_EVENT_TIME, eventTime)
+                                current.sendOrderedBroadcastAsUser(request, android.os.Process.myUserHandle(),
+                                    null, object : BroadcastReceiver() {
+                                        override fun onReceive(context: Context, intent: Intent) {
+                                            if (resultCode != TriggerBroadcastContract.RESULT_HANDLED) return
+                                            inputHandler.post {
+                                                if (contactActive && contactDownTime == downTime &&
+                                                    SystemClock.uptimeMillis() - eventTime in 0L..400L
+                                                ) runCatching { cancelTouch.invoke(manager) }.onFailure(::reportFailure)
+                                            }
+                                        }
+                                    }, mainHandler, TriggerBroadcastContract.RESULT_NOT_READY, null, null)
+                            }.onFailure(::reportFailure)
+                        }
                     }
                     val action = recognizer.observe(event, allowed = true)
                         ?: return@runCatching
@@ -105,6 +191,8 @@ internal object FourFingerGestureHook {
                     }
                 }.onFailure {
                     detector?.abandon()
+                    bottomCornerDetector?.reset()
+                    twoFingerDetector?.reset()
                     reportFailure(it)
                 }
                 return chain.proceed()

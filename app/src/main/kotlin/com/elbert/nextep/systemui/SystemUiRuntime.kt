@@ -26,6 +26,7 @@ import com.elbert.nextep.monitoring.WorkspaceEnergyDiagnostics
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.task.MainTaskPresentationCoordinator
 import com.elbert.nextep.trigger.TriggerBroadcastContract
+import com.elbert.nextep.trigger.TriggerGesture
 import com.elbert.nextep.trigger.WorkspaceRecoveryPolicy
 import com.elbert.nextep.workspace.SidebarSide
 import com.elbert.nextep.workspace.SystemServerWorkspaceBridge
@@ -114,12 +115,15 @@ object SystemUiRuntime {
                 queriedConfig.blockSystemDragShareEnabled)
             SystemServerWorkspaceBridge.publishLandscapeVideoMode(applicationContext,
                 queriedConfig.landscapeVideoMode)
+            SystemServerWorkspaceBridge.publishTriggerGestures(applicationContext,
+                queriedConfig.triggerGestures)
             AppLanguage.updateHostLanguage(queriedConfig.languageTag)
             workspaceConfigReady = true
             lifecycleHandler.post {
                 if (::windowController.isInitialized) {
                     windowController.setSlotBackgroundSwipeEnabled(workspaceConfig.slotBackgroundSwipeEnabled)
                     windowController.setNavigationButtonsEnabled(workspaceConfig.navigationButtonsEnabled)
+                    windowController.setSlotCount(workspaceConfig.slotCount)
                     windowController.setSlotAutoHibernateConfig(
                         workspaceConfig.slotAutoHibernateEnabled,
                         workspaceConfig.slotAutoHibernateTimeoutSeconds,
@@ -130,7 +134,8 @@ object SystemUiRuntime {
             }
             NeXtepLog.info(
                 "workspace_config",
-                "Applied statusBarGesture=${workspaceConfig.statusBarGestureEnabled} " +
+                "Applied triggerGestures=${TriggerGesture.encode(workspaceConfig.triggerGestures)} " +
+                    "slotCount=${workspaceConfig.slotCount} " +
                     "slotBackgroundSwipe=${workspaceConfig.slotBackgroundSwipeEnabled} " +
                     "slotAutoHibernate=${workspaceConfig.slotAutoHibernateEnabled}@" +
                     "${workspaceConfig.slotAutoHibernateTimeoutSeconds}s " +
@@ -142,7 +147,8 @@ object SystemUiRuntime {
         }
     }
 
-    fun isStatusBarGestureEnabled(): Boolean = workspaceConfigReady && workspaceConfig.statusBarGestureEnabled
+    fun isStatusBarGestureEnabled(): Boolean = workspaceConfigReady &&
+        TriggerGesture.STATUS_BAR_SWIPE in workspaceConfig.triggerGestures
 
     fun shouldAutoMinimizeMainOnTopAppSwitch(): Boolean = workspaceConfig.autoMinimizeMainOnTopAppSwitch
 
@@ -313,6 +319,7 @@ object SystemUiRuntime {
                 addAction(TriggerBroadcastContract.ACTION_QUERY_WORKSPACE)
                 addAction(TriggerBroadcastContract.ACTION_LAUNCH_SLOT_TEST)
                 addAction(TriggerBroadcastContract.ACTION_FOUR_FINGER_WORKSPACE)
+                addAction(TriggerBroadcastContract.ACTION_TRIGGER_GESTURE)
             }
             applicationContext.registerReceiver(
                 controlReceiver,
@@ -600,6 +607,7 @@ object SystemUiRuntime {
         }
         TriggerBroadcastContract.ACTION_QUERY_WORKSPACE -> true
         TriggerBroadcastContract.ACTION_FOUR_FINGER_WORKSPACE -> fourFingerGestures.handleRequest(intent)
+        TriggerBroadcastContract.ACTION_TRIGGER_GESTURE -> fourFingerGestures.handleTriggerGesture(intent)
         TriggerBroadcastContract.ACTION_LAUNCH_SLOT_TEST -> {
             val active = workspaceController.isActive() || workspaceController.setActive(true)
             active && workspaceController.launchInSlot(

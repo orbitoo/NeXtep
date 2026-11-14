@@ -12,6 +12,7 @@ import android.view.Display
 import android.view.MotionEvent
 import com.elbert.nextep.framework.HyperOsEnvironment
 import com.elbert.nextep.logging.NeXtepLog
+import com.elbert.nextep.trigger.TriggerGesture
 import com.elbert.nextep.workspace.SystemServerWorkspaceBridge
 import com.elbert.nextep.workspace.WorkspaceGeometry
 import io.github.libxposed.api.XposedInterface
@@ -178,8 +179,22 @@ object HyperOsInputEdgeGuardHook {
     }
 
     private fun onPointerEvent(event: MotionEvent) {
+        if (HyperOsEnvironment.isMagnificationFallbackActive()) {
+            cornerState = CornerState.IGNORED
+            return
+        }
         val geometry = SystemServerWorkspaceBridge.observedActiveGeometry()
-        if (geometry == null || HyperOsEnvironment.isMagnificationFallbackActive()) {
+        val triggerGestures = SystemServerWorkspaceBridge.observedTriggerGestures()
+        val hasCornerTrigger = TriggerGesture.BOTTOM_LEFT in triggerGestures ||
+            TriggerGesture.BOTTOM_RIGHT in triggerGestures
+        if (geometry == null && !hasCornerTrigger) {
+            cornerState = CornerState.IGNORED
+            return
+        }
+        val metrics = wmContext?.resources?.displayMetrics
+        val screenW = geometry?.screenWidth ?: metrics?.widthPixels ?: 0
+        val screenH = geometry?.screenHeight ?: metrics?.heightPixels ?: 0
+        if (screenW <= 0 || screenH <= 0) {
             cornerState = CornerState.IGNORED
             return
         }
@@ -190,15 +205,20 @@ object HyperOsInputEdgeGuardHook {
                 lastDownUptimeMs = SystemClock.uptimeMillis()
                 lastDownRawX = rawX
                 lastDownRawY = rawY
-                cornerState = if (isInBottomCornerZone(rawX, rawY, geometry)) {
-                    CornerState.OBSERVING
+                val hitCorner = if (geometry != null) {
+                    isInBottomCornerZone(rawX, rawY, screenW, screenH, leftEnabled = true, rightEnabled = true)
                 } else {
-                    CornerState.IGNORED
+                    isInBottomCornerZone(
+                        rawX, rawY, screenW, screenH,
+                        leftEnabled = TriggerGesture.BOTTOM_LEFT in triggerGestures,
+                        rightEnabled = TriggerGesture.BOTTOM_RIGHT in triggerGestures,
+                    )
                 }
+                cornerState = if (hitCorner) CornerState.OBSERVING else CornerState.IGNORED
             }
             MotionEvent.ACTION_MOVE -> {
                 if (cornerState == CornerState.OBSERVING) {
-                    val density = wmContext?.resources?.displayMetrics?.density ?: 3f
+                    val density = metrics?.density ?: 3f
                     val dx = kotlin.math.abs(rawX - lastDownRawX)
                     val dy = lastDownRawY - rawY
                     val threshold = 24f * density
@@ -206,7 +226,9 @@ object HyperOsInputEdgeGuardHook {
                         cornerState = CornerState.CONFIRMED
                         cornerConfirmedUntilMs = SystemClock.uptimeMillis() + CORNER_CONFIRMED_GRACE_MS
                         discardHeldPilfer()
-                    } else if (kotlin.math.abs(dy) > threshold * 2f && dy < 0f) {
+                    } else if ((geometry == null && dy >= threshold && dx < threshold * 0.35f) ||
+                        (kotlin.math.abs(dy) > threshold * 2f && dy < 0f)
+                    ) {
                         cornerState = CornerState.ABANDONED
                         replayHeldPilfer()
                     }
@@ -223,11 +245,18 @@ object HyperOsInputEdgeGuardHook {
         }
     }
 
-    private fun isInBottomCornerZone(x: Float, y: Float, geometry: WorkspaceGeometry): Boolean {
+    private fun isInBottomCornerZone(
+        x: Float,
+        y: Float,
+        screenWidth: Int,
+        screenHeight: Int,
+        leftEnabled: Boolean,
+        rightEnabled: Boolean,
+    ): Boolean {
         val density = wmContext?.resources?.displayMetrics?.density ?: 3f
         val cornerBand = 48f * density
-        if (y < geometry.screenHeight - cornerBand) return false
-        return x <= cornerBand || x >= geometry.screenWidth - cornerBand
+        if (y < screenHeight - cornerBand) return false
+        return (leftEnabled && x <= cornerBand) || (rightEnabled && x >= screenWidth - cornerBand)
     }
 
     private fun installPreStartupHook(module: XposedModule, wmsClass: Class<*>) {
@@ -328,12 +357,12 @@ object HyperOsInputEdgeGuardHook {
     }
 
     private fun shouldHoldPilfer(callingUid: Int): Boolean {
-        val geometry = SystemServerWorkspaceBridge.observedActiveGeometry() ?: return false
         if (HyperOsEnvironment.isMagnificationFallbackActive()) return false
         if (miuiHomeUid >= 0 && callingUid != miuiHomeUid) return false
         val now = SystemClock.uptimeMillis()
         if (cornerState == CornerState.OBSERVING) return true
         if (cornerState == CornerState.CONFIRMED && now <= cornerConfirmedUntilMs) return true
+        val geometry = SystemServerWorkspaceBridge.observedActiveGeometry() ?: return false
         val elapsed = now - lastDownUptimeMs
         return elapsed in 0..REDIRECT_BLOCK_WINDOW_MS &&
             geometry.isPointInClaimedChrome(lastDownRawX, lastDownRawY)
