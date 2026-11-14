@@ -181,4 +181,12 @@
     <string name="block_system_drag_share_summary">阻止系统底部推荐栏接管图片等内容的拖拽；退出工作区后恢复系统行为。</string>
     <string name="return_after_sharing_title">分享后返回原应用</string>
     <string name="return_after_sharing_summary">分享流程结束后，自动将拖出内容的原应用换回主窗；关闭后保留分享目标应用。</string>
+    <string name="landscape_video_mode_title">横屏视频与游戏处理</string>
+    <string name="landscape_video_mode_summary">主窗应用切入横屏视频或游戏时：在主窗内就地横转、顶部横铺置顶，或自动退出工作区全屏显示。</string>
+    <string name="landscape_video_mode_turned">主窗内横转（默认）</string>
+    <string name="landscape_video_mode_top">顶部横铺置顶</string>
+    <string name="landscape_video_mode_fullscreen">退出工作区并全屏</string>
+    <string name="landscape_video_mode_turned_short">主窗横转</string>
+    <string name="landscape_video_mode_top_short">顶部置顶</string>
+    <string name="landscape_video_mode_fullscreen_short">退出全屏</string>
 </resources>

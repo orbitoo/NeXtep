@@ -181,4 +181,12 @@
     <string name="block_system_drag_share_summary">避免系統底部推薦列接管圖片等內容的拖曳；離開工作區後恢復系統行為。</string>
     <string name="return_after_sharing_title">分享後返回原應用程式</string>
     <string name="return_after_sharing_summary">分享流程結束後，自動將拖出內容的原應用程式換回主視窗；關閉後保留分享目標應用程式。</string>
+    <string name="landscape_video_mode_title">橫向影片與遊戲處理</string>
+    <string name="landscape_video_mode_summary">主視窗應用程式進入橫向影片或遊戲時：於主視窗內橫轉、頂部橫向置頂，或自動離開工作區全螢幕顯示。</string>
+    <string name="landscape_video_mode_turned">主視窗內橫轉（預設）</string>
+    <string name="landscape_video_mode_top">頂部橫向置頂</string>
+    <string name="landscape_video_mode_fullscreen">離開工作區並全螢幕</string>
+    <string name="landscape_video_mode_turned_short">主窗橫轉</string>
+    <string name="landscape_video_mode_top_short">頂部置頂</string>
+    <string name="landscape_video_mode_fullscreen_short">離開全螢幕</string>
 </resources>

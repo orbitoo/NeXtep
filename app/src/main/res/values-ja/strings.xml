@@ -181,4 +181,12 @@
     <string name="block_system_drag_share_summary">ワークスペース内では、画面下部の共有候補が画像などのドラッグを受け取らないようにします。終了すると元に戻ります。</string>
     <string name="return_after_sharing_title">共有後に元のアプリに戻る</string>
     <string name="return_after_sharing_summary">共有操作が終了すると、ドラッグ元のアプリをメインウィンドウに戻します。オフにすると共有先のアプリを表示したままにします。</string>
+    <string name="landscape_video_mode_title">横画面動画・ゲームの動作</string>
+    <string name="landscape_video_mode_summary">メインウィンドウで横画面の動画やゲームを開いたとき：枠内で回転、上部に固定表示、またはワークスペースを閉じて全画面表示します。</string>
+    <string name="landscape_video_mode_turned">メイン枠内で回転（既定）</string>
+    <string name="landscape_video_mode_top">上部に横向き固定</string>
+    <string name="landscape_video_mode_fullscreen">ワークスペースを終了して全画面</string>
+    <string name="landscape_video_mode_turned_short">枠内回転</string>
+    <string name="landscape_video_mode_top_short">上部固定</string>
+    <string name="landscape_video_mode_fullscreen_short">全画面</string>
 </resources>

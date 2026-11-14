@@ -181,4 +181,12 @@
     <string name="block_system_drag_share_summary">작업 공간에서는 화면 아래 공유 추천이 이미지 등의 드래그를 가로채지 않도록 합니다. 작업 공간을 닫으면 원래대로 돌아갑니다.</string>
     <string name="return_after_sharing_title">공유 후 원래 앱으로 돌아가기</string>
     <string name="return_after_sharing_summary">공유 작업이 끝나면 드래그한 원래 앱을 주 창으로 되돌립니다. 끄면 공유 대상 앱을 주 창에 유지합니다.</string>
+    <string name="landscape_video_mode_title">가로 동영상·게임 처리 방식</string>
+    <string name="landscape_video_mode_summary">주 창 앱이 가로 동영상이나 게임으로 전환될 때: 주 창 안에서 회전, 상단 가로 고정 또는 작업 공간을 닫고 전체 화면으로 전환합니다.</string>
+    <string name="landscape_video_mode_turned">주 창 내 회전 (기본값)</string>
+    <string name="landscape_video_mode_top">상단 가로 고정</string>
+    <string name="landscape_video_mode_fullscreen">작업 공간 종료 후 전체 화면</string>
+    <string name="landscape_video_mode_turned_short">주 창 회전</string>
+    <string name="landscape_video_mode_top_short">상단 고정</string>
+    <string name="landscape_video_mode_fullscreen_short">전체 화면</string>
 </resources>

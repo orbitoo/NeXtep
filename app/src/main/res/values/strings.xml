@@ -189,4 +189,12 @@
     <string name="block_system_drag_share_summary">Prevents the system’s bottom share panel from taking over content drags in the workspace. Normal behavior returns when you exit.</string>
     <string name="return_after_sharing_title">Return to source app after sharing</string>
     <string name="return_after_sharing_summary">Automatically switch back to the app you dragged from when the share flow ends. Turn off to keep the receiving app in the main window.</string>
+    <string name="landscape_video_mode_title">Landscape &amp; fullscreen behavior</string>
+    <string name="landscape_video_mode_summary">Choose how landscape videos or games are handled in the workspace: rotate inside the main pane, pin on top, or exit to system fullscreen.</string>
+    <string name="landscape_video_mode_turned">Rotate inside main window</string>
+    <string name="landscape_video_mode_top">Pin horizontally on top</string>
+    <string name="landscape_video_mode_fullscreen">Exit workspace for fullscreen</string>
+    <string name="landscape_video_mode_turned_short">Rotated main</string>
+    <string name="landscape_video_mode_top_short">Top pinned</string>
+    <string name="landscape_video_mode_fullscreen_short">Fullscreen</string>
 </resources>
