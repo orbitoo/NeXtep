@@ -27,6 +27,8 @@ class SettingsRepository(private val context: Context) {
         val blockSystemDragShareEnabled: Boolean = WorkspaceConfigContract.DEFAULT_BLOCK_SYSTEM_DRAG_SHARE_ENABLED,
         val returnAfterSharingEnabled: Boolean = WorkspaceConfigContract.DEFAULT_RETURN_AFTER_SHARING_ENABLED,
         val exitOnLock: Boolean = false,
+        val slotAutoHibernateEnabled: Boolean = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED,
+        val slotAutoHibernateTimeoutSeconds: Int = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
     )
 
     fun topBarSettings(): TopBarSettings = TopBarSettings(
@@ -63,6 +65,16 @@ class SettingsRepository(private val context: Context) {
         returnAfterSharingEnabled = preferences.getBoolean(KEY_RETURN_AFTER_SHARING_ENABLED,
             WorkspaceConfigContract.DEFAULT_RETURN_AFTER_SHARING_ENABLED),
         exitOnLock = preferences.getBoolean(KEY_EXIT_ON_LOCK, false),
+        slotAutoHibernateEnabled = preferences.getBoolean(
+            KEY_SLOT_AUTO_HIBERNATE_ENABLED,
+            WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED,
+        ),
+        slotAutoHibernateTimeoutSeconds = WorkspaceConfigContract.normalizeSlotAutoHibernateTimeoutSeconds(
+            preferences.getInt(
+                KEY_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+                WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+            ),
+        ),
     )
 
     fun setFourFingerGestureEnabled(enabled: Boolean) {
@@ -119,6 +131,19 @@ class SettingsRepository(private val context: Context) {
 
     fun setExitOnLock(enabled: Boolean) {
         preferences.edit().putBoolean(KEY_EXIT_ON_LOCK, enabled).apply()
+        notifyTopContentChanged()
+    }
+
+    fun setSlotAutoHibernateEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_SLOT_AUTO_HIBERNATE_ENABLED, enabled).apply()
+        notifyTopContentChanged()
+    }
+
+    fun setSlotAutoHibernateTimeoutSeconds(seconds: Int) {
+        preferences.edit().putInt(
+            KEY_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+            WorkspaceConfigContract.normalizeSlotAutoHibernateTimeoutSeconds(seconds),
+        ).apply()
         notifyTopContentChanged()
     }
 
@@ -206,6 +231,8 @@ class SettingsRepository(private val context: Context) {
         const val KEY_BLOCK_SYSTEM_DRAG_SHARE_ENABLED = "block_system_drag_share_enabled"
         const val KEY_RETURN_AFTER_SHARING_ENABLED = "return_after_sharing_enabled"
         const val KEY_EXIT_ON_LOCK = "exit_on_lock"
+        const val KEY_SLOT_AUTO_HIBERNATE_ENABLED = "slot_auto_hibernate_enabled"
+        const val KEY_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS = "slot_auto_hibernate_timeout_seconds"
         const val DEFAULT_TOP_TITLE = ""
         const val COMPONENT_SEPARATOR = "\n"
         const val MAX_TOP_APPS = 36

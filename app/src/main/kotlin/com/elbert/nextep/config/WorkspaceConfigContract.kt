@@ -37,6 +37,8 @@ data class WorkspaceTopConfig(
     val blockSystemDragShareEnabled: Boolean = WorkspaceConfigContract.DEFAULT_BLOCK_SYSTEM_DRAG_SHARE_ENABLED,
     val returnAfterSharingEnabled: Boolean = WorkspaceConfigContract.DEFAULT_RETURN_AFTER_SHARING_ENABLED,
     val exitOnLock: Boolean = false,
+    val slotAutoHibernateEnabled: Boolean = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED,
+    val slotAutoHibernateTimeoutSeconds: Int = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
 )
 
 object WorkspaceConfigContract {
@@ -64,6 +66,13 @@ object WorkspaceConfigContract {
     const val EXTRA_AUTO_MINIMIZE_MAIN = "com.elbert.nextep.extra.AUTO_MINIMIZE_MAIN_ON_TOP_APP_SWITCH"
     const val EXTRA_NAVIGATION_BUTTONS_ENABLED = "com.elbert.nextep.extra.NAVIGATION_BUTTONS_ENABLED"
     const val EXTRA_EXIT_ON_LOCK = "com.elbert.nextep.extra.EXIT_ON_LOCK"
+    const val EXTRA_SLOT_AUTO_HIBERNATE_ENABLED = "com.elbert.nextep.extra.SLOT_AUTO_HIBERNATE_ENABLED"
+    const val EXTRA_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS = "com.elbert.nextep.extra.SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS"
+    const val DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED = true
+    const val MIN_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS = 15
+    const val MAX_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS = 120
+    const val SLOT_AUTO_HIBERNATE_TIMEOUT_STEP_SECONDS = 15
+    const val DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS = 30
     const val EXTRA_SWAP_ANIMATION_DURATION_MS = "com.elbert.nextep.extra.SWAP_ANIMATION_DURATION_MS"
     const val EXTRA_LANGUAGE_TAG = "com.elbert.nextep.extra.LANGUAGE_TAG"
     const val MIN_SWAP_ANIMATION_DURATION_MS = 100
@@ -78,6 +87,15 @@ object WorkspaceConfigContract {
         val clamped = durationMs.coerceIn(MIN_SWAP_ANIMATION_DURATION_MS, MAX_SWAP_ANIMATION_DURATION_MS)
         return ((clamped + SWAP_ANIMATION_DURATION_STEP_MS / 2) / SWAP_ANIMATION_DURATION_STEP_MS) *
             SWAP_ANIMATION_DURATION_STEP_MS
+    }
+
+    fun normalizeSlotAutoHibernateTimeoutSeconds(seconds: Int): Int {
+        val clamped = seconds.coerceIn(
+            MIN_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+            MAX_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+        )
+        return ((clamped + SLOT_AUTO_HIBERNATE_TIMEOUT_STEP_SECONDS / 2) /
+            SLOT_AUTO_HIBERNATE_TIMEOUT_STEP_SECONDS) * SLOT_AUTO_HIBERNATE_TIMEOUT_STEP_SECONDS
     }
 
     fun queryIntent(): Intent = Intent(ACTION_QUERY)
@@ -117,6 +135,11 @@ class WorkspaceConfigReceiver : BroadcastReceiver() {
                 putBoolean(WorkspaceConfigContract.EXTRA_AUTO_MINIMIZE_MAIN, settings.autoMinimizeMainOnTopAppSwitch)
                 putBoolean(WorkspaceConfigContract.EXTRA_NAVIGATION_BUTTONS_ENABLED, settings.navigationButtonsEnabled)
                 putBoolean(WorkspaceConfigContract.EXTRA_EXIT_ON_LOCK, settings.exitOnLock)
+                putBoolean(WorkspaceConfigContract.EXTRA_SLOT_AUTO_HIBERNATE_ENABLED, settings.slotAutoHibernateEnabled)
+                putInt(
+                    WorkspaceConfigContract.EXTRA_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+                    settings.slotAutoHibernateTimeoutSeconds,
+                )
                 putInt(WorkspaceConfigContract.EXTRA_SWAP_ANIMATION_DURATION_MS, settings.swapAnimationDurationMs)
                 putString(WorkspaceConfigContract.EXTRA_LANGUAGE_TAG, AppLanguage.selectedTag(context))
                 putStringArrayList(
@@ -275,6 +298,16 @@ object WorkspaceConfigClient {
             ) ?: false,
             exitOnLock = extras.getBoolean(
                 WorkspaceConfigContract.EXTRA_EXIT_ON_LOCK, false,
+            ),
+            slotAutoHibernateEnabled = extras.getBoolean(
+                WorkspaceConfigContract.EXTRA_SLOT_AUTO_HIBERNATE_ENABLED,
+                WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED,
+            ),
+            slotAutoHibernateTimeoutSeconds = WorkspaceConfigContract.normalizeSlotAutoHibernateTimeoutSeconds(
+                extras.getInt(
+                    WorkspaceConfigContract.EXTRA_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+                    WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+                ),
             ),
             swapAnimationDurationMs = WorkspaceConfigContract.normalizeSwapAnimationDurationMs(
                 extras.getInt(WorkspaceConfigContract.EXTRA_SWAP_ANIMATION_DURATION_MS,
