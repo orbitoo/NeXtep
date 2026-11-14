@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import com.elbert.nextep.logging.NeXtepLog
+import com.elbert.nextep.workspace.LandscapeVideoMode
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.CountDownLatch
@@ -39,6 +40,7 @@ data class WorkspaceTopConfig(
     val exitOnLock: Boolean = false,
     val slotAutoHibernateEnabled: Boolean = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED,
     val slotAutoHibernateTimeoutSeconds: Int = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+    val landscapeVideoMode: LandscapeVideoMode = LandscapeVideoMode.DEFAULT,
 )
 
 object WorkspaceConfigContract {
@@ -68,6 +70,7 @@ object WorkspaceConfigContract {
     const val EXTRA_EXIT_ON_LOCK = "com.elbert.nextep.extra.EXIT_ON_LOCK"
     const val EXTRA_SLOT_AUTO_HIBERNATE_ENABLED = "com.elbert.nextep.extra.SLOT_AUTO_HIBERNATE_ENABLED"
     const val EXTRA_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS = "com.elbert.nextep.extra.SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS"
+    const val EXTRA_LANDSCAPE_VIDEO_MODE = "com.elbert.nextep.extra.LANDSCAPE_VIDEO_MODE"
     const val DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED = true
     const val MIN_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS = 15
     const val MAX_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS = 120
@@ -139,6 +142,10 @@ class WorkspaceConfigReceiver : BroadcastReceiver() {
                 putInt(
                     WorkspaceConfigContract.EXTRA_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
                     settings.slotAutoHibernateTimeoutSeconds,
+                )
+                putString(
+                    WorkspaceConfigContract.EXTRA_LANDSCAPE_VIDEO_MODE,
+                    settings.landscapeVideoMode.wireValue,
                 )
                 putInt(WorkspaceConfigContract.EXTRA_SWAP_ANIMATION_DURATION_MS, settings.swapAnimationDurationMs)
                 putString(WorkspaceConfigContract.EXTRA_LANGUAGE_TAG, AppLanguage.selectedTag(context))
@@ -312,6 +319,9 @@ object WorkspaceConfigClient {
             swapAnimationDurationMs = WorkspaceConfigContract.normalizeSwapAnimationDurationMs(
                 extras.getInt(WorkspaceConfigContract.EXTRA_SWAP_ANIMATION_DURATION_MS,
                     WorkspaceConfigContract.DEFAULT_SWAP_ANIMATION_DURATION_MS),
+            ),
+            landscapeVideoMode = LandscapeVideoMode.fromWireValue(
+                extras.getString(WorkspaceConfigContract.EXTRA_LANDSCAPE_VIDEO_MODE),
             ),
         )
     }

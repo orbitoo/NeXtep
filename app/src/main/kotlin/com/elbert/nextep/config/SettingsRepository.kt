@@ -1,6 +1,7 @@
 package com.elbert.nextep.config
 
 import android.content.Context
+import com.elbert.nextep.workspace.LandscapeVideoMode
 
 class SettingsRepository(private val context: Context) {
     private val preferences = context.getSharedPreferences("nextep_settings", Context.MODE_PRIVATE)
@@ -29,6 +30,7 @@ class SettingsRepository(private val context: Context) {
         val exitOnLock: Boolean = false,
         val slotAutoHibernateEnabled: Boolean = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED,
         val slotAutoHibernateTimeoutSeconds: Int = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+        val landscapeVideoMode: LandscapeVideoMode = LandscapeVideoMode.DEFAULT,
     )
 
     fun topBarSettings(): TopBarSettings = TopBarSettings(
@@ -74,6 +76,9 @@ class SettingsRepository(private val context: Context) {
                 KEY_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
                 WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
             ),
+        ),
+        landscapeVideoMode = LandscapeVideoMode.fromWireValue(
+            preferences.getString(KEY_LANDSCAPE_VIDEO_MODE, null),
         ),
     )
 
@@ -144,6 +149,11 @@ class SettingsRepository(private val context: Context) {
             KEY_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
             WorkspaceConfigContract.normalizeSlotAutoHibernateTimeoutSeconds(seconds),
         ).apply()
+        notifyTopContentChanged()
+    }
+
+    fun setLandscapeVideoMode(mode: LandscapeVideoMode) {
+        preferences.edit().putString(KEY_LANDSCAPE_VIDEO_MODE, mode.wireValue).apply()
         notifyTopContentChanged()
     }
 
@@ -233,6 +243,7 @@ class SettingsRepository(private val context: Context) {
         const val KEY_EXIT_ON_LOCK = "exit_on_lock"
         const val KEY_SLOT_AUTO_HIBERNATE_ENABLED = "slot_auto_hibernate_enabled"
         const val KEY_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS = "slot_auto_hibernate_timeout_seconds"
+        const val KEY_LANDSCAPE_VIDEO_MODE = "landscape_video_mode"
         const val DEFAULT_TOP_TITLE = ""
         const val COMPONENT_SEPARATOR = "\n"
         const val MAX_TOP_APPS = 36
