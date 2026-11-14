@@ -34,6 +34,40 @@ import com.elbert.nextep.workspace.WorkspaceStateBridge
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
+internal object WorkspaceLockObservationPolicy {
+    const val FALLBACK_LOCK_POLL_INTERVAL_MS = 500L
+    const val MAX_UNLOCK_DISPLAY_RETRIES = 20
+    const val UNLOCK_DISPLAY_RETRY_MS = 100L
+
+    fun lockPollingIntervalMs(
+        workspaceActive: Boolean,
+        screenReady: Boolean,
+        keyguardObserverRegistered: Boolean,
+        displayObserverRegistered: Boolean,
+    ): Long? {
+        if (!workspaceActive || !screenReady) return null
+        // When both system listeners succeeded, transitions are event-driven;
+        // otherwise retain fallback polling only while the screen is awake.
+        return if (keyguardObserverRegistered && displayObserverRegistered) null
+        else FALLBACK_LOCK_POLL_INTERVAL_MS
+    }
+
+    fun unlockRetryDelayMs(
+        locked: Boolean,
+        screenReady: Boolean,
+        keyguardObserverRegistered: Boolean,
+        retryCount: Int,
+    ): Long? {
+        if (locked) {
+            return if (!screenReady || keyguardObserverRegistered) null else FALLBACK_LOCK_POLL_INTERVAL_MS
+        }
+        if (!screenReady) {
+            return if (retryCount < MAX_UNLOCK_DISPLAY_RETRIES) UNLOCK_DISPLAY_RETRY_MS else null
+        }
+        return null
+    }
+}
+
 object SystemUiRuntime {
     private val initialized = AtomicBoolean(false)
     private lateinit var applicationContext: Context
@@ -46,6 +80,9 @@ object SystemUiRuntime {
     }
     @Volatile private var workspaceConfig = WorkspaceTopConfig()
     @Volatile private var workspaceConfigReady = false
+    @Volatile private var keyguardObserverRegistered = false
+    @Volatile private var displayObserverRegistered = false
+    private var unlockDisplayRetryCount = 0
     private val configRetry = Runnable { refreshWorkspaceConfig() }
     private val taskRefreshQueued = AtomicBoolean(false)
     private val taskRefresh = Runnable {
@@ -104,9 +141,17 @@ object SystemUiRuntime {
     fun shouldReturnAfterSharing(): Boolean = workspaceConfig.returnAfterSharingEnabled
     private val lockStateObserver = object : Runnable {
         override fun run() {
-            if (!::workspaceController.isInitialized || !workspaceController.isActive()) return
+            if (!::workspaceController.isInitialized || !workspaceController.isActive()) {
+                updateLockStateObservation()
+                return
+            }
             val screenReady = isScreenReady()
-            if (!screenReady || isKeyguardLocked(applicationContext)) {
+            val locked = isKeyguardLocked(applicationContext)
+            if (!screenReady || locked) {
+                if (workspaceConfig.exitOnLock) {
+                    exitWorkspaceOnLock()
+                    return
+                }
                 if (!workspaceController.isSuspended()) {
                     workspaceController.suspendForLock()
                     publishWorkspaceSurfaceState(false)
@@ -117,40 +162,78 @@ object SystemUiRuntime {
                 // Panels and input remain suspended; only hidden buffers warm up.
                 windowController.updateSuspendedOutputs(screenReady)
             } else if (workspaceController.isSuspended()) {
+                unlockDisplayRetryCount = 0
                 lifecycleHandler.removeCallbacks(resumeAfterUnlock)
                 resumeAfterUnlock.run()
             }
-            updateLockStateObservation()
+            updateLockStateObservation(screenReady = screenReady, keyguardLocked = locked)
         }
     }
 
-    private fun updateLockStateObservation() {
+    private fun updateLockStateObservation(
+        screenReady: Boolean? = null,
+        keyguardLocked: Boolean? = null,
+    ) {
         // State transitions can occur inside an observation callback. Remove any
         // queued copy before scheduling, so there is only one fallback chain.
         lifecycleHandler.removeCallbacks(lockStateObserver)
-        if (::workspaceController.isInitialized && workspaceController.isActive()) {
-            lifecycleHandler.postDelayed(lockStateObserver, 500L)
-        } else {
+        val active = ::workspaceController.isInitialized && workspaceController.isActive()
+        if (!active) {
+            unlockDisplayRetryCount = 0
             lifecycleHandler.removeCallbacks(resumeAfterUnlock)
+            return
+        }
+        val ready = screenReady ?: isScreenReady()
+        val intervalMs = WorkspaceLockObservationPolicy.lockPollingIntervalMs(
+            workspaceActive = true,
+            screenReady = ready,
+            keyguardObserverRegistered = keyguardObserverRegistered,
+            displayObserverRegistered = displayObserverRegistered,
+        )
+        if (intervalMs != null) {
+            lifecycleHandler.postDelayed(lockStateObserver, intervalMs)
         }
     }
+
     private val resumeAfterUnlock = object : Runnable {
         override fun run() {
             lifecycleHandler.removeCallbacks(this)
-            if (!::workspaceController.isInitialized || !workspaceController.isSuspended()) return
+            if (!::workspaceController.isInitialized || !workspaceController.isSuspended()) {
+                unlockDisplayRetryCount = 0
+                return
+            }
             val locked = isKeyguardLocked(applicationContext)
             val screenReady = isScreenReady()
             windowController.updateSuspendedOutputs(screenReady)
+            val retryDelayMs = WorkspaceLockObservationPolicy.unlockRetryDelayMs(
+                locked = locked,
+                screenReady = screenReady,
+                keyguardObserverRegistered = keyguardObserverRegistered,
+                retryCount = unlockDisplayRetryCount,
+            )
             if (locked || !screenReady) {
-                // USER_PRESENT can precede the physical display becoming ready.
-                // Keep this attempt alive instead of waiting for another broadcast.
-                lifecycleHandler.postDelayed(this, if (locked) 500L else UNLOCK_DISPLAY_RETRY_MS)
+                if (retryDelayMs != null) {
+                    if (!locked) unlockDisplayRetryCount += 1
+                    lifecycleHandler.postDelayed(this, retryDelayMs)
+                }
                 return
             }
+            unlockDisplayRetryCount = 0
             val resumed = workspaceController.resumeAfterLock()
             publishWorkspaceSurfaceState(resumed)
             if (!resumed) WorkspaceStateBridge.requestInactiveFromSystemUi(applicationContext)
         }
+    }
+
+    private fun exitWorkspaceOnLock() {
+        lifecycleHandler.removeCallbacks(lockStateObserver)
+        lifecycleHandler.removeCallbacks(resumeAfterUnlock)
+        unlockDisplayRetryCount = 0
+        TaskSurfaceCompat.finishWorkspaceExitAnimations()
+        workspaceController.setActive(false)
+        publishWorkspaceSurfaceState(false)
+        WorkspaceStateBridge.requestInactiveFromSystemUi(applicationContext)
+        NeXtepLog.info("systemui_runtime", "Workspace exited on lock")
     }
     private val keyguardStateListener = KeyguardManager.KeyguardLockedStateListener {
         // Re-read current state: a queued callback can belong to an earlier wake.
@@ -171,12 +254,14 @@ object SystemUiRuntime {
         runCatching {
             checkNotNull(applicationContext.getSystemService(KeyguardManager::class.java))
                 .addKeyguardLockedStateListener(applicationContext.mainExecutor, keyguardStateListener)
+            keyguardObserverRegistered = true
         }.onFailure {
             NeXtepLog.warn("workspace_unlock", "Keyguard callback unavailable; retaining state polling", it)
         }
         runCatching {
             checkNotNull(applicationContext.getSystemService(DisplayManager::class.java))
                 .registerDisplayListener(displayStateListener, lifecycleHandler)
+            displayObserverRegistered = true
         }.onFailure {
             NeXtepLog.warn("workspace_unlock", "Display callback unavailable; retaining state polling", it)
         }
@@ -408,15 +493,23 @@ object SystemUiRuntime {
             if (!::workspaceController.isInitialized || !workspaceController.isActive()) return
             when (intent.action) {
                 Intent.ACTION_SCREEN_OFF -> {
+                    if (workspaceConfig.exitOnLock) {
+                        exitWorkspaceOnLock()
+                        return
+                    }
                     lifecycleHandler.removeCallbacks(resumeAfterUnlock)
+                    unlockDisplayRetryCount = 0
                     workspaceController.suspendForLock()
                     windowController.updateSuspendedOutputs(screenAwake = false)
                     publishWorkspaceSurfaceState(false)
+                    updateLockStateObservation(screenReady = false, keyguardLocked = true)
                     return
                 }
                 Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                    unlockDisplayRetryCount = 0
                     lifecycleHandler.removeCallbacks(resumeAfterUnlock)
                     lifecycleHandler.post(resumeAfterUnlock)
+                    updateLockStateObservation()
                     return
                 }
             }
@@ -567,6 +660,5 @@ object SystemUiRuntime {
             applicationContext.getSystemService(DisplayManager::class.java)
                 ?.getDisplay(Display.DEFAULT_DISPLAY)?.state == Display.STATE_ON
 
-    private const val UNLOCK_DISPLAY_RETRY_MS = 100L
     private const val PANEL_COLLAPSE_DELAY_MS = 380L
 }
