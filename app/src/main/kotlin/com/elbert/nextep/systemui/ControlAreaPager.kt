@@ -12,6 +12,7 @@ import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.animation.DecelerateInterpolator
@@ -21,6 +22,7 @@ import com.elbert.nextep.config.AppLanguage
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.workspace.ControlAreaVideoState
 import com.elbert.nextep.workspace.WorkspaceControlMetrics
+import com.elbert.nextep.workspace.WorkspaceGeometry
 import java.lang.reflect.Proxy
 import kotlin.math.abs
 
@@ -32,7 +34,8 @@ internal class ControlAreaPager(context: Context, private val functions: TopAppS
         ::onVideoStateChanged,
         onReleaseRequested = { showPage(0) },
         canAutomaticallyCapture = {
-            activePointerId == MotionEvent.INVALID_POINTER_ID && !functions.isInternalAppDragActive() &&
+            pinnedTopView == null &&
+                activePointerId == MotionEvent.INVALID_POINTER_ID && !functions.isInternalAppDragActive() &&
                 settleAnimator?.isRunning != true
         },
     )
@@ -80,6 +83,20 @@ internal class ControlAreaPager(context: Context, private val functions: TopAppS
     private var velocity: VelocityTracker? = null
     private var landscape = false
     private var controlOnLeft = false
+    private val pinnedTopContainer = FrameLayout(context).apply {
+        visibility = GONE
+        addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            val w = right - left
+            val h = bottom - top
+            val oldW = oldRight - oldLeft
+            val oldH = oldBottom - oldTop
+            if (pinnedTopView != null && w > 0 && h > 0 && (w != oldW || h != oldH)) {
+                onPinnedZoneSized?.invoke(w, h)
+            }
+        }
+    }
+    private var pinnedTopView: View? = null
+    private var onPinnedZoneSized: ((Int, Int) -> Unit)? = null
     private var insetsListener: Any? = null
     private var insetsObserver: ViewTreeObserver? = null
 
@@ -95,6 +112,12 @@ internal class ControlAreaPager(context: Context, private val functions: TopAppS
         // Keep ordinary controls after the SurfaceView hole during transparent-region gathering.
         addView(functions, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         addView(pageIndicator, LayoutParams(dp(30f).toInt(), dp(8f).toInt(), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
+        addView(
+            pinnedTopContainer,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
+                topMargin = statusBandPx()
+            },
+        )
         // The workspace boundary belongs to both pages and must never slide off with either one.
         addView(boundaryDivider, LayoutParams(LayoutParams.MATCH_PARENT, dp(1f).toInt().coerceAtLeast(1), Gravity.BOTTOM))
         updatePagePositions()
@@ -121,6 +144,45 @@ internal class ControlAreaPager(context: Context, private val functions: TopAppS
     }
 
     fun refreshHost() = video.refreshHost()
+
+    fun setPinnedTopView(view: View?, onZoneSized: ((Int, Int) -> Unit)? = null) {
+        cancelGesture()
+        onPinnedZoneSized = onZoneSized
+        if (pinnedTopView === view && (view == null || view.parent === pinnedTopContainer)) {
+            if (view != null && pinnedTopContainer.width > 0 && pinnedTopContainer.height > 0) {
+                onZoneSized?.invoke(pinnedTopContainer.width, pinnedTopContainer.height)
+            }
+            return
+        }
+        pinnedTopContainer.removeAllViews()
+        pinnedTopView = view
+        if (view != null) {
+            (view.parent as? ViewGroup)?.removeView(view)
+            (pinnedTopContainer.layoutParams as? LayoutParams)?.topMargin = statusBandPx()
+            pinnedTopContainer.addView(view, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            pinnedTopContainer.visibility = VISIBLE
+            video.setNativeInputAvailable(false)
+        } else {
+            pinnedTopContainer.visibility = GONE
+            video.setNativeInputAvailable(insetsListener != null)
+        }
+        updatePagePositions()
+        requestLayout()
+        FloatingWindowTouchPassThroughController.notifyFloatingWindowsChanged()
+        if (view != null && pinnedTopContainer.width > 0 && pinnedTopContainer.height > 0) {
+            onZoneSized?.invoke(pinnedTopContainer.width, pinnedTopContainer.height)
+        }
+    }
+
+    fun pinnedZoneSize(geometry: WorkspaceGeometry): Pair<Int, Int> {
+        if (pinnedTopContainer.width > 0 && pinnedTopContainer.height > 0) {
+            return pinnedTopContainer.width to pinnedTopContainer.height
+        }
+        val status = statusBandPx()
+        val zoneW = if (width > 0) width else geometry.controlWidth
+        val zoneH = ((if (height > 0) height else geometry.controlHeight) - status).coerceAtLeast(1)
+        return zoneW to zoneH
+    }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
@@ -177,13 +239,13 @@ internal class ControlAreaPager(context: Context, private val functions: TopAppS
     }
 
     override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
-        if (!hasVideoPage || functions.isInternalAppDragActive()) return false
+        if (pinnedTopView != null || !hasVideoPage || functions.isInternalAppDragActive()) return false
         if (dragging) return true
         return tryStartPageDrag(event)
     }
 
     private fun tryStartPageDrag(event: MotionEvent): Boolean {
-        if (!hasVideoPage || functions.isInternalAppDragActive()) return false
+        if (pinnedTopView != null || !hasVideoPage || functions.isInternalAppDragActive()) return false
         if (event.actionMasked != MotionEvent.ACTION_MOVE || verticalGesture) return false
         val index = event.findPointerIndex(activePointerId)
         if (index < 0) return false
@@ -211,7 +273,7 @@ internal class ControlAreaPager(context: Context, private val functions: TopAppS
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (!hasVideoPage) return super.onTouchEvent(event)
+        if (pinnedTopView != null || !hasVideoPage) return super.onTouchEvent(event)
         val index = event.findPointerIndex(activePointerId)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> return true
@@ -307,16 +369,22 @@ internal class ControlAreaPager(context: Context, private val functions: TopAppS
     }
 
     private fun updatePagePositions() {
+        val pinned = pinnedTopView != null
         functions.translationX = -pageOffset
+        functions.visibility = if (pinned) INVISIBLE else VISIBLE
         // Never use GONE/INVISIBLE here: SurfaceView must retain the remote source.
-        video.translationX = width - pageOffset
+        video.translationX = if (pinned) width.toFloat() else width - pageOffset
+        video.alpha = if (pinned) 0f else 1f
         video.setPageViewport(video.translationX, width, height)
-        val videoSelected = selectedPage == 1 && hasVideoPage
+        val videoSelected = !pinned && selectedPage == 1 && hasVideoPage
         video.setPageActive(videoSelected && abs(pageOffset - width.toFloat()) < 1f)
-        functions.importantForAccessibility = if (videoSelected) IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS else IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        functions.importantForAccessibility = if (pinned || videoSelected) IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS else IMPORTANT_FOR_ACCESSIBILITY_AUTO
         video.importantForAccessibility = if (videoSelected) IMPORTANT_FOR_ACCESSIBILITY_AUTO else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-        contentDescription = AppLanguage.string(context, if (videoSelected) R.string.control_page_video else R.string.control_page_functions)
-        pageIndicator.visibility = if (hasVideoPage) VISIBLE else GONE
+        contentDescription = AppLanguage.string(
+            context,
+            if (pinned) R.string.landscape_video_mode_top_short else if (videoSelected) R.string.control_page_video else R.string.control_page_functions,
+        )
+        pageIndicator.visibility = if (!pinned && hasVideoPage) VISIBLE else GONE
         pageIndicator.invalidate()
         invalidate()
     }
@@ -345,17 +413,19 @@ internal class ControlAreaPager(context: Context, private val functions: TopAppS
                     info.javaClass.getMethod("setTouchableInsets", Int::class.javaPrimitiveType)
                         .invoke(info, TOUCHABLE_INSETS_REGION)
                     val region = info.javaClass.getField("touchableRegion").get(info) as Region
-                    val status = dp(WorkspaceControlMetrics.STATUS_HEIGHT_DP.toFloat()).toInt().coerceIn(0, height)
+                    val status = statusBandPx()
                     if (landscape) {
                         // Keep the existing physical-top status band mapping after subtree rotation.
                         if (controlOnLeft) region.set(status, 0, height, width)
                         else region.set(0, 0, height - status, width)
                     } else region.set(0, status, width, height)
-                    runCatching { video.subtractNativeInputRegion(region) }.onFailure {
-                        // Leave the control window touchable when a ROM cannot supply
-                        // the native viewport; the next host update disables delegation.
-                        video.setNativeInputAvailable(false)
-                        NeXtepLog.warn("control_video", "Native player touch region unavailable", it)
+                    if (pinnedTopView == null) {
+                        runCatching { video.subtractNativeInputRegion(region) }.onFailure {
+                            // Leave the control window touchable when a ROM cannot supply
+                            // the native viewport; the next host update disables delegation.
+                            video.setNativeInputAvailable(false)
+                            NeXtepLog.warn("control_video", "Native player touch region unavailable", it)
+                        }
                     }
                     FloatingWindowTouchPassThroughController.subtractFloatingRegions(this, region)
                 }
@@ -379,6 +449,11 @@ internal class ControlAreaPager(context: Context, private val functions: TopAppS
         }
         insetsListener = null
         insetsObserver = null
+    }
+
+    private fun statusBandPx(): Int {
+        val raw = dp(WorkspaceControlMetrics.STATUS_HEIGHT_DP.toFloat()).toInt().coerceAtLeast(0)
+        return if (height > 0) raw.coerceAtMost(height) else raw
     }
 
     private fun dp(value: Float): Float = value * resources.displayMetrics.density
