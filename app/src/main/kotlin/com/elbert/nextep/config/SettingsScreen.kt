@@ -21,6 +21,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
+import com.elbert.nextep.workspace.LandscapeVideoMode
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.card.MaterialCardView
@@ -77,6 +78,7 @@ object SettingsScreen {
             val selectedLanguage = AppLanguage.selectedTag(activity)
             val launcherIconButton = LauncherIconPreference.createButton(activity)
             val fourFingerBlacklistButton = createFourFingerBlacklistButton(activity, repository, apps)
+            val landscapeVideoModeButton = createLandscapeVideoModeButton(activity, repository, settings.landscapeVideoMode)
             val languageButton = SettingsRowButton.create(activity).apply {
                 text = languageLabels[AppLanguage.languageTags.indexOf(selectedLanguage).coerceAtLeast(0)]
                 contentDescription = activity.getString(R.string.setting_description,
@@ -226,6 +228,17 @@ object SettingsScreen {
                         settings.navigationButtonsEnabled,
                         repository::setNavigationButtonsEnabled,
                     ), matchWidth())
+                    addView(settingDivider(activity))
+                    addView(settingRow(
+                        activity,
+                        activity.getString(R.string.landscape_video_mode_title),
+                        activity.getString(R.string.landscape_video_mode_summary),
+                        landscapeVideoModeButton,
+                    ).apply {
+                        setOnClickListener { landscapeVideoModeButton.performClick() }
+                        isFocusable = false
+                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    }, matchWidth())
                     addView(settingDivider(activity))
                     addView(settingSwitchRow(
                         activity,
@@ -813,6 +826,52 @@ object SettingsScreen {
                 }
             })
         }, matchWidth())
+    }
+
+    private fun createLandscapeVideoModeButton(
+        activity: AppCompatActivity,
+        repository: SettingsRepository,
+        initialMode: LandscapeVideoMode,
+    ): MaterialButton {
+        val modes = arrayOf(
+            LandscapeVideoMode.TURNED,
+            LandscapeVideoMode.TOP,
+            LandscapeVideoMode.FULLSCREEN,
+        )
+        val dialogLabels = arrayOf(
+            activity.getString(R.string.landscape_video_mode_turned),
+            activity.getString(R.string.landscape_video_mode_top),
+            activity.getString(R.string.landscape_video_mode_fullscreen),
+        )
+        val shortLabels = mapOf(
+            LandscapeVideoMode.TURNED to activity.getString(R.string.landscape_video_mode_turned_short),
+            LandscapeVideoMode.TOP to activity.getString(R.string.landscape_video_mode_top_short),
+            LandscapeVideoMode.FULLSCREEN to activity.getString(R.string.landscape_video_mode_fullscreen_short),
+        )
+        var current = initialMode
+        return SettingsRowButton.create(activity).apply {
+            fun updateLabel() {
+                text = shortLabels[current].orEmpty()
+                contentDescription = activity.getString(
+                    R.string.setting_description,
+                    activity.getString(R.string.landscape_video_mode_title),
+                    text,
+                )
+            }
+            updateLabel()
+            setOnClickListener {
+                com.google.android.material.dialog.MaterialAlertDialogBuilder(activity)
+                    .setTitle(R.string.landscape_video_mode_title)
+                    .setSingleChoiceItems(dialogLabels, modes.indexOf(current).coerceAtLeast(0)) { dialog, index ->
+                        dialog.dismiss()
+                        current = modes[index]
+                        repository.setLandscapeVideoMode(current)
+                        updateLabel()
+                    }
+                    .setNegativeButton(R.string.action_cancel, null)
+                    .show()
+            }
+        }
     }
 
     private fun settingDivider(activity: AppCompatActivity) = View(activity).apply {
