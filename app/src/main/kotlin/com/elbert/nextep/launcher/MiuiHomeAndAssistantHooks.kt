@@ -39,6 +39,8 @@ object MiuiHomeAndAssistantHooks {
 
     private val blurAdapterActiveCache: MutableMap<Any, Boolean> =
         Collections.synchronizedMap(WeakHashMap())
+    private val contentViewBlurConfigured: MutableMap<Any, Boolean> =
+        Collections.synchronizedMap(WeakHashMap())
 
     @Volatile
     private var skipLayerAnimUntilUptimeMs: Long = Long.MIN_VALUE
@@ -324,6 +326,18 @@ object MiuiHomeAndAssistantHooks {
         val overlayField = runCatching {
             superclass.getDeclaredField("mOverlay").apply { isAccessible = true }
         }.getOrNull() ?: return
+        val contentViewField = runCatching {
+            superclass.getDeclaredField("mContentView").apply { isAccessible = true }
+        }.getOrNull()
+        val widgetBlurManagerClass = runCatching {
+            classLoader.loadClass("com.miui.personalassistant.core.blur.WidgetBackgroundBlurManager")
+        }.getOrNull()
+        val enableContainerBlurMethod = widgetBlurManagerClass?.let { cls ->
+            runCatching { cls.getDeclaredMethod("e", View::class.java).apply { isAccessible = true } }.getOrNull()
+        }
+        val clearContainerBlurMethod = widgetBlurManagerClass?.let { cls ->
+            runCatching { cls.getDeclaredMethod("b", View::class.java).apply { isAccessible = true } }.getOrNull()
+        }
 
         val isViewBlur = runCatching {
             adapterClass.getDeclaredMethod("isViewBlur").apply { isAccessible = true }
@@ -362,10 +376,22 @@ object MiuiHomeAndAssistantHooks {
         }.getOrNull()?.let { initMethod ->
             module.hook(initMethod).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
-                    synchronized(blurAdapterActiveCache) {
-                        chain.thisObject?.let { blurAdapterActiveCache.remove(it) }
+                    val host = chain.thisObject
+                    if (host != null) {
+                        blurAdapterActiveCache.remove(host)
                     }
-                    return chain.proceed()
+                    val result = chain.proceed()
+                    if (host != null) {
+                        val forceWindowBlur = shouldForceWindowBlur(blurStateField, overlayField, host)
+                        syncAssistantContentBlurContainer(
+                            adapter = host,
+                            contentViewField = contentViewField,
+                            enableContainerBlurMethod = enableContainerBlurMethod,
+                            clearContainerBlurMethod = clearContainerBlurMethod,
+                            enable = forceWindowBlur,
+                        )
+                    }
+                    return result
                 }
             })
         }
@@ -376,14 +402,51 @@ object MiuiHomeAndAssistantHooks {
             module.hook(leaveMethod).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     val result = chain.proceed()
-                    synchronized(blurAdapterActiveCache) {
-                        chain.thisObject?.let { blurAdapterActiveCache.remove(it) }
+                    val host = chain.thisObject
+                    if (host != null) {
+                        syncAssistantContentBlurContainer(
+                            adapter = host,
+                            contentViewField = contentViewField,
+                            enableContainerBlurMethod = enableContainerBlurMethod,
+                            clearContainerBlurMethod = clearContainerBlurMethod,
+                            enable = false,
+                        )
+                        blurAdapterActiveCache.remove(host)
                     }
                     return result
                 }
             })
         }
         NeXtepLog.info("miui_assistant_blur", "Installed DeviceBlurBlendAdapter hooks")
+    }
+
+    /**
+     * When forcing window-level blur on a BLUR_VIEW device during workspace mode,
+     * `DeviceBlurBlendAdapter.initBlurParams()` clears pass-through blur on `DecorView`,
+     * starving child `setMiViewBlurMode(1)` widget cards unless `mContentView` acts as
+     * the blur container (matching MIUI's native `!isViewBlur()` `updateBlurState()` path).
+     * Clean up only adapters we configured so native mode exits with zero residual state.
+     */
+    private fun syncAssistantContentBlurContainer(
+        adapter: Any,
+        contentViewField: Field?,
+        enableContainerBlurMethod: Method?,
+        clearContainerBlurMethod: Method?,
+        enable: Boolean,
+    ) {
+        val contentView = contentViewField?.let { field ->
+            runCatching { field.get(adapter) as? View }.getOrNull()
+        } ?: return
+        if (enable) {
+            if (enableContainerBlurMethod == null) return
+            contentViewBlurConfigured[adapter] = true
+            runCatching { enableContainerBlurMethod.invoke(null, contentView) }
+                .onFailure { NeXtepLog.warn("miui_assistant_blur", "Failed to enable content container blur", it) }
+        } else if (contentViewBlurConfigured.remove(adapter) == true) {
+            if (clearContainerBlurMethod == null) return
+            runCatching { clearContainerBlurMethod.invoke(null, contentView) }
+                .onFailure { NeXtepLog.warn("miui_assistant_blur", "Failed to clear content container blur", it) }
+        }
     }
 
     private fun shouldForceWindowBlur(
