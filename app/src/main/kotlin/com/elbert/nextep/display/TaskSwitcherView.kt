@@ -2,10 +2,12 @@ package com.elbert.nextep.display
 
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
+import android.text.TextUtils
 import android.view.DragEvent
 import android.view.Gravity
 import android.view.MotionEvent
@@ -13,7 +15,10 @@ import android.view.TextureView
 import android.view.View
 import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.TextView
+import com.elbert.nextep.R
+import com.elbert.nextep.config.AppLanguage
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.workspace.SidebarSide
 
@@ -28,6 +33,8 @@ class TaskSwitcherView(
         fun onSlotDragStarted(source: TaskSwitcherView, drag: SlotTaskDrag): Boolean
         fun onSlotDragTouch(source: View, event: MotionEvent): Boolean
         fun onSlotBackgroundSwiped(drag: SlotTaskDrag): Boolean
+        fun onSlotHibernateToggled(drag: SlotTaskDrag): Boolean = false
+        fun onSlotHibernateBadgeClicked(slotIndex: Int) {}
         fun onSlotDragEnded()
         fun onSlotDropped(slotIndex: Int, drag: SlotTaskDrag): Boolean
         fun onContentDragEvent(slotIndex: Int, event: DragEvent): Boolean = false
@@ -35,6 +42,43 @@ class TaskSwitcherView(
 
     var textureView: TextureView = createTextureView()
         private set
+
+    private val hibernatePreviewView = ImageView(context).apply {
+        scaleType = ImageView.ScaleType.MATRIX
+    }
+    private val hibernateScrimView = View(context).apply {
+        setBackgroundColor(Color.argb(72, 10, 14, 20))
+    }
+    private val hibernateBadge = TextView(context).apply {
+        setTextColor(Color.WHITE)
+        textSize = 11f
+        maxLines = 1
+        ellipsize = TextUtils.TruncateAt.END
+        gravity = Gravity.CENTER
+        setPadding(dp(9), dp(4), dp(9), dp(4))
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(12).toFloat()
+            setColor(Color.argb(212, 22, 28, 36))
+            setStroke(dp(1).coerceAtLeast(1), Color.argb(115, 255, 255, 255))
+        }
+    }
+    private val hibernateOverlay = FrameLayout(context).apply {
+        visibility = GONE
+        isClickable = false
+        isFocusable = false
+        addView(hibernatePreviewView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(hibernateScrimView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(
+            hibernateBadge,
+            LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                bottomMargin = dp(8)
+                marginStart = dp(6)
+                marginEnd = dp(6)
+            },
+        )
+    }
 
     private val statusView = TextView(context).apply {
         setTextColor(Color.WHITE)
@@ -50,6 +94,10 @@ class TaskSwitcherView(
     private var ownsDrag = false
     private var acceptsContentDrag = false
     private var exchangePreviewActive = false
+    private var hibernated = false
+    private var waitingWakeFrame = false
+    private var frozenPreview: Bitmap? = null
+    private var downOnHibernateBadge = false
     private val backgroundSwipe = SlotBackgroundSwipeGesture(
         view = this,
         currentTask = {
@@ -58,6 +106,7 @@ class TaskSwitcherView(
         },
         onStarted = { listener?.onSlotDragStarting(it) == true },
         onDismiss = { listener?.onSlotBackgroundSwiped(it) == true },
+        onHibernateToggle = { listener?.onSlotHibernateToggled(it) == true },
         onEnded = { listener?.onSlotDragEnded() },
     )
 
@@ -66,13 +115,21 @@ class TaskSwitcherView(
         isClickable = true
         setBackgroundColor(Color.TRANSPARENT)
         addView(textureView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(hibernateOverlay, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         addView(
             statusView,
             LayoutParams(dp(30), dp(30), Gravity.CENTER),
         )
+        addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateHibernatePreviewMatrix() }
         showState(SlotState.Empty)
         setOnDragListener { _, event -> handleDrag(event) }
         setOnClickListener {
+            if (hibernated && downOnHibernateBadge && currentState is SlotState.Occupied) {
+                downOnHibernateBadge = false
+                hibernateBadge.alpha = 1f
+                listener?.onSlotHibernateBadgeClicked(slotIndex)
+                return@setOnClickListener
+            }
             // The coordinator serializes exchanges and retains the latest selection.
             // Filtering busy taps here prevents that queue from ever receiving them.
             if (currentState is SlotState.Ready || currentState is SlotState.Occupied ||
@@ -81,6 +138,8 @@ class TaskSwitcherView(
             }
         }
         setOnLongClickListener {
+            downOnHibernateBadge = false
+            hibernateBadge.alpha = 1f
             val occupied = currentState as? SlotState.Occupied
                 ?: return@setOnLongClickListener false
             if (busy || waiting) return@setOnLongClickListener false
@@ -90,12 +149,23 @@ class TaskSwitcherView(
             val started = listener?.onSlotDragStarted(this, drag) == true
             if (!started) finishDrag()
             else {
-                textureView.alpha = 0.55f
+                setContentAlpha(0.55f)
             }
             started
         }
         setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downOnHibernateBadge = isPointInsideHibernateBadge(event.x, event.y)
+                    hibernateBadge.alpha = if (downOnHibernateBadge) 0.72f else 1f
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    hibernateBadge.alpha = 1f
+                }
+            }
             if (listener?.onSlotDragTouch(view, event) == true) {
+                downOnHibernateBadge = false
+                hibernateBadge.alpha = 1f
                 backgroundSwipe.cancel()
                 true
             } else backgroundSwipe.touch(event)
@@ -155,6 +225,7 @@ class TaskSwitcherView(
 
     fun showWaiting() {
         backgroundSwipe.cancel()
+        clearHibernateCoverImmediate()
         waiting = true
         textureView.animate().cancel()
         textureView.animate()
@@ -178,6 +249,7 @@ class TaskSwitcherView(
 
     fun replaceTextureView(listener: TextureView.SurfaceTextureListener): TextureView {
         backgroundSwipe.cancel()
+        clearHibernateCoverImmediate()
         waiting = true
         val previous = textureView
         previous.animate().cancel()
@@ -197,11 +269,110 @@ class TaskSwitcherView(
 
     override fun onInterceptTouchEvent(event: MotionEvent): Boolean = true
 
+    internal fun resetSwipeAnimations() {
+        textureView.animate().cancel()
+        textureView.scaleX = 1f
+        textureView.scaleY = 1f
+        hibernateOverlay.animate().cancel()
+        hibernateOverlay.scaleX = 1f
+        hibernateOverlay.scaleY = 1f
+    }
+
+    internal fun setSwipeTransform(translationX: Float, alpha: Float) {
+        textureView.translationX = translationX
+        textureView.alpha = alpha
+        if (hibernateOverlay.visibility == VISIBLE) {
+            hibernateOverlay.translationX = translationX
+            hibernateOverlay.alpha = alpha
+        }
+    }
+
+    internal fun captureFrozenCover(sourceWidth: Int, sourceHeight: Int): Bitmap? {
+        if (!textureView.isAvailable || width <= 0 || height <= 0) return null
+        val targetWidth = computeFrozenCoverWidth(width, sourceWidth)
+        val targetHeight = if (sourceWidth > 0 && sourceHeight > 0) {
+            (targetWidth * sourceHeight.toLong() / sourceWidth).toInt().coerceAtLeast(1)
+        } else height
+        return runCatching { textureView.getBitmap(targetWidth, targetHeight) }.getOrNull()
+    }
+
+    internal fun showHibernated(preview: Bitmap?) {
+        hibernated = true
+        waitingWakeFrame = false
+        backgroundSwipe.cancel()
+        val previous = frozenPreview
+        frozenPreview = preview
+        hibernatePreviewView.setImageBitmap(preview)
+        updateHibernatePreviewMatrix()
+        if (previous != null && previous !== preview && !previous.isRecycled) previous.recycle()
+        updateHibernateBadgeText()
+        hibernateScrimView.visibility = VISIBLE
+        hibernateBadge.visibility = VISIBLE
+        hibernateBadge.alpha = 1f
+        hibernateOverlay.animate().cancel()
+        hibernateOverlay.translationX = 0f
+        hibernateOverlay.alpha = 1f
+        hibernateOverlay.visibility = VISIBLE
+    }
+
+    internal fun beginWakeFromHibernate(immediate: Boolean = false) {
+        if (!hibernated && !waitingWakeFrame && frozenPreview == null) return
+        if (immediate || frozenPreview == null) {
+            clearHibernateCoverImmediate()
+            return
+        }
+        hibernated = false
+        waitingWakeFrame = true
+        downOnHibernateBadge = false
+        hibernateScrimView.visibility = GONE
+        hibernateBadge.visibility = GONE
+        hibernateOverlay.alpha = 1f
+        hibernateOverlay.visibility = VISIBLE
+    }
+
+    internal fun finishWakeFrame() {
+        if (!waitingWakeFrame) return
+        clearHibernateCoverImmediate()
+    }
+
+    internal fun clearHibernateCoverImmediate() {
+        hibernated = false
+        waitingWakeFrame = false
+        downOnHibernateBadge = false
+        hibernateOverlay.animate().cancel()
+        hibernateOverlay.visibility = GONE
+        hibernateOverlay.translationX = 0f
+        hibernateOverlay.alpha = 1f
+        hibernateScrimView.visibility = GONE
+        hibernateBadge.visibility = GONE
+        hibernateBadge.alpha = 1f
+        hibernatePreviewView.setImageDrawable(null)
+        frozenPreview?.let { bitmap ->
+            frozenPreview = null
+            if (!bitmap.isRecycled) bitmap.recycle()
+        }
+    }
+
+    internal fun updateHibernatePreviewTransform() {
+        updateHibernatePreviewMatrix()
+    }
+
     fun capturePreview(width: Int = textureView.width, height: Int = textureView.height): Bitmap? = runCatching {
         com.elbert.nextep.monitoring.WorkspaceEnergyDiagnostics.previewCaptures.incrementAndGet()
         // Exchanges request the producer's recorded size. The no-argument
         // TextureView bitmap is only rail-sized and blurs when promoted to main.
-        val bitmap = textureView.getBitmap(width, height) ?: return@runCatching null
+        val cached = frozenPreview?.takeIf { !it.isRecycled && (hibernated || waitingWakeFrame) }
+        val bitmap = if (cached != null) {
+            val targetW = width.coerceAtLeast(1)
+            val targetH = height.coerceAtLeast(1)
+            if (cached.width == targetW && cached.height == targetH) {
+                cached.copy(Bitmap.Config.ARGB_8888, false)
+            } else {
+                Bitmap.createScaledBitmap(cached, targetW, targetH, true)
+            }
+        } else {
+            textureView.getBitmap(width, height) ?: return@runCatching null
+        }
         // TextureView returns its logical portrait buffer. Follow the rail's
         // actual transform so reverse-landscape drag/swap previews face correctly.
         val panelRotation = (parent as? View)?.rotation ?: 0f
@@ -227,6 +398,7 @@ class TaskSwitcherView(
         acceptsContentDrag = false
         backgroundSwipe.cancel()
         finishDrag()
+        clearHibernateCoverImmediate()
         super.onDetachedFromWindow()
     }
 
@@ -234,7 +406,42 @@ class TaskSwitcherView(
         if (!ownsDrag) return
         ownsDrag = false
         listener?.onSlotDragEnded()
-        if (!busy && currentState is SlotState.Occupied) textureView.alpha = 1f
+        if (!busy && currentState is SlotState.Occupied) setContentAlpha(1f)
+    }
+
+    private fun setContentAlpha(alpha: Float) {
+        textureView.alpha = alpha
+        if (hibernateOverlay.visibility == VISIBLE) hibernateOverlay.alpha = alpha
+    }
+
+    private fun updateHibernateBadgeText() {
+        hibernateBadge.text = AppLanguage.string(context, R.string.slot_hibernated_badge)
+        hibernateBadge.contentDescription = AppLanguage.string(context, R.string.slot_hibernated_badge_description)
+    }
+
+    private fun isPointInsideHibernateBadge(x: Float, y: Float): Boolean {
+        if (!hibernated || hibernateOverlay.visibility != VISIBLE || hibernateBadge.visibility != VISIBLE) {
+            return false
+        }
+        val hitSlop = dp(8)
+        return x >= hibernateBadge.left - hitSlop && x <= hibernateBadge.right + hitSlop &&
+            y >= hibernateBadge.top - hitSlop && y <= hibernateBadge.bottom + hitSlop
+    }
+
+    private fun updateHibernatePreviewMatrix() {
+        val bitmap = frozenPreview ?: return
+        if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0 || width <= 0 || height <= 0) return
+        val textureMatrix = Matrix()
+        textureView.getTransform(textureMatrix)
+        hibernatePreviewView.imageMatrix = Matrix().apply {
+            setScale(width.toFloat() / bitmap.width, height.toFloat() / bitmap.height)
+            postConcat(textureMatrix)
+        }
+    }
+
+    private fun computeFrozenCoverWidth(viewWidth: Int, sourceWidth: Int): Int {
+        val desired = maxOf(viewWidth * 2, 420)
+        return if (sourceWidth > 0) minOf(sourceWidth, desired) else desired.coerceAtLeast(1)
     }
 
     private fun handleDrag(event: DragEvent): Boolean {
@@ -309,6 +516,7 @@ class TaskSwitcherView(
     private fun SlotState.inDragTargetStates(): Boolean = this is SlotState.Ready || this is SlotState.Occupied
 
     private fun showReady(highlighted: Boolean = false, animated: Boolean = false) {
+        clearHibernateCoverImmediate()
         textureView.animate().cancel()
         if (animated) {
             textureView.animate()
@@ -338,6 +546,7 @@ class TaskSwitcherView(
     private fun showOccupied(animated: Boolean) {
         statusView.animate().cancel()
         setStatusVisible(false)
+        hibernateOverlay.translationX = 0f
 
         textureView.animate().cancel()
         if (animated) {
