@@ -38,8 +38,19 @@ object SystemUiRootTransformController {
     private var active = false
     private var geometry: WorkspaceGeometry? = null
 
+    @Volatile
+    private var touchDragInProgress = false
+
     fun observeRoot(view: View) {
-        if (!isNotificationShadeRoot(view)) return
+        if (!isNotificationShadeRoot(view)) {
+            if (view.width == 0 && view.rootView === view &&
+                (windowTitle(view).contains("NotificationShade", ignoreCase = true) ||
+                    view.javaClass.name.contains("NotificationShadeWindowView"))
+            ) {
+                view.post { observeRoot(view) }
+            }
+            return
+        }
         roots.getOrPut(view) {
             NeXtepLog.info(
                 "systemui_root_transform",
@@ -60,6 +71,7 @@ object SystemUiRootTransformController {
     fun setActive(requestedActive: Boolean, fitExistingShade: Boolean = true) {
         active = requestedActive
         if (active) {
+            discoverExistingRoots()
             // A top-corner workspace gesture can be confirmed while the shade is already open.
             // In that path the root was observed by the same touch dispatch, but there is no
             // subsequent downward shade gesture to start its transform. Apply all live observed
@@ -72,6 +84,36 @@ object SystemUiRootTransformController {
             transformedRoots.clear()
         }
         NeXtepLog.info("systemui_root_transform", "active=$active roots=${roots.size}")
+    }
+
+    fun isActive(): Boolean = active
+
+    fun setTouchDragInProgress(inProgress: Boolean) {
+        touchDragInProgress = inProgress
+    }
+
+    fun discoverExistingRoots() {
+        HyperOsShadeTransformHooks.discoverWindowManagerRoots(::observeRoot)
+    }
+
+    fun currentShadeCropRect(): Rect? {
+        val currentGeometry = geometry ?: return null
+        return SystemUiShadeTransformPolicy.resolveShadeSurfaceCropRect(
+            contentLeft = currentGeometry.contentLeft,
+            contentTop = currentGeometry.contentTop,
+            contentRight = currentGeometry.contentRight,
+            contentBottom = currentGeometry.contentBottom,
+        )
+    }
+
+    fun onHyperOsShadeExpanded(expanded: Boolean, forceRestore: Boolean = false) {
+        if (expanded && !forceRestore) {
+            if (!active || geometry == null) return
+            discoverExistingRoots()
+            beginObservedShadeTransform()
+        } else if (forceRestore || !touchDragInProgress) {
+            transformedRoots.keys.toList().forEach(::restore)
+        }
     }
 
     fun setGeometry(value: WorkspaceGeometry) {
@@ -95,19 +137,47 @@ object SystemUiRootTransformController {
         TouchCoordinateMapper.toScreen(event, transform)
     }
 
+    fun activeTransformForTransformedRoot(view: View?): TouchCoordinateMapper.Transform? {
+        val root = view?.rootView ?: return null
+        if (!active || transformedRoots[root] != true || root.width <= 1 || root.height <= 1) {
+            return null
+        }
+        return transformFor()
+    }
+
+    fun mapLocationToContent(view: View, location: IntArray) {
+        if (location.size < 2) return
+        val transform = activeTransformForTransformedRoot(view) ?: return
+        location[0] = SystemUiShadeTransformPolicy.inverseMapRoundedCoordinate(
+            location[0],
+            transform.scaleX,
+            transform.translationX,
+        )
+        location[1] = SystemUiShadeTransformPolicy.inverseMapRoundedCoordinate(
+            location[1],
+            transform.scaleY,
+            transform.translationY,
+        )
+    }
+
+    fun mapBoundsToContent(view: View, bounds: Rect) {
+        val transform = activeTransformForTransformedRoot(view) ?: return
+        SystemUiShadeTransformPolicy.inverseMapRect(
+            bounds = bounds,
+            scaleX = transform.scaleX,
+            scaleY = transform.scaleY,
+            translationX = transform.translationX,
+            translationY = transform.translationY,
+        )
+    }
+
     fun mapWindowLocationToContent(view: View, location: IntArray) {
-        val root = view.rootView
-        if (!active || transformedRoots[root] != true || location.size < 2 ||
-            root.width <= 1 || root.height <= 1
-        ) return
-        val transform = transformFor()
-        location[0] = ((location[0] - transform.translationX) / transform.scaleX).roundToInt()
-        location[1] = ((location[1] - transform.translationY) / transform.scaleY).roundToInt()
+        mapLocationToContent(view, location)
     }
 
     fun beginShadeTransform(view: View): Boolean {
         observeRoot(view)
-        if (!active || !roots.containsKey(view)) return false
+        if (!active || geometry == null || !roots.containsKey(view)) return false
         apply(view)
         transformedRoots[view] = true
         monitorUntilCollapsed(view)
@@ -115,7 +185,7 @@ object SystemUiRootTransformController {
     }
 
     fun beginObservedShadeTransform(): Boolean {
-        if (!active) return false
+        if (!active || geometry == null) return false
         var transformed = false
         roots.keys.toList().forEach { view ->
             if (view.parent != null && isNotificationShadeRoot(view)) {
@@ -144,12 +214,18 @@ object SystemUiRootTransformController {
             view.clipBounds = Rect(it.availableLeft, it.availableTop, it.availableRight, it.availableBottom)
             SystemUiShadeInputController.apply(view, it)
         }
+        if (isNotificationShadeRoot(view)) {
+            HyperOsShadeTransformHooks.syncNotificationShadeSurfaceCrop(view, currentShadeCropRect())
+        }
     }
 
     private fun restore(view: View) {
         stopMonitoring(view)
         transformedRoots.remove(view)
         SystemUiShadeInputController.restore(view)
+        if (isNotificationShadeRoot(view)) {
+            HyperOsShadeTransformHooks.syncNotificationShadeSurfaceCrop(view, null)
+        }
         val original = roots[view] ?: return
         view.pivotX = original.pivotX
         view.pivotY = original.pivotY
