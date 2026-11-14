@@ -11,6 +11,7 @@ import android.view.Display
 import android.view.DragEvent
 import com.elbert.nextep.R
 import com.elbert.nextep.config.AppLanguage
+import com.elbert.nextep.config.WorkspaceConfigContract
 import com.elbert.nextep.framework.ActivityTaskManagerCompat
 import com.elbert.nextep.framework.TaskSurfaceCompat
 import com.elbert.nextep.framework.UserTargetedActivityLauncher
@@ -49,6 +50,7 @@ class SlotTaskCoordinator(
         var migrationRecoveryTask: TaskRepository.TaskSnapshot? = null,
         var migrationRecoveryDeadline: Long = 0L,
         var migrationRecoveryAttempts: Int = 0,
+        var occupiedSinceMs: Long = 0L,
     )
 
     private data class TaskLayout(
@@ -68,6 +70,9 @@ class SlotTaskCoordinator(
     )
     private val handler = Handler(Looper.getMainLooper())
     private val slotRecords = MutableList(slots.size) { SlotRecord() }
+    private val idleCheckRunnables = List(slots.size) { index -> Runnable { onSlotIdleTimeout(index) } }
+    private var autoHibernateEnabled = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED
+    private var autoHibernateTimeoutSeconds = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS
     private var active = false
     private var suspended = false
     private var transitionInProgress = false
@@ -194,9 +199,19 @@ class SlotTaskCoordinator(
         slotRecords.forEach { record ->
             record.pendingComponent = null
             record.pendingAttempts = 0
+            record.occupiedSinceMs = 0L
             clearMigrationRecovery(record)
         }
         NeXtepLog.info("slot_coordinator", "Deactivated retained=${retainedTaskDescription()}")
+    }
+
+    fun setAutoHibernateConfig(enabled: Boolean, timeoutSeconds: Int) {
+        ensureMainThread()
+        val normalizedTimeout = WorkspaceConfigContract.normalizeSlotAutoHibernateTimeoutSeconds(timeoutSeconds)
+        if (autoHibernateEnabled == enabled && autoHibernateTimeoutSeconds == normalizedTimeout) return
+        autoHibernateEnabled = enabled
+        autoHibernateTimeoutSeconds = normalizedTimeout
+        slotRecords.indices.forEach { scheduleIdleMonitor(it, resetAnchor = true) }
     }
 
     private fun parkTasksBeforeExit() {
@@ -289,6 +304,7 @@ class SlotTaskCoordinator(
             }
             suspended = false
             slots.forEach { it.view.setBusy(false) }
+            slotRecords.indices.forEach { scheduleIdleMonitor(it, resetAnchor = true) }
             handler.removeCallbacks(reconciliation)
             reconciliationAt = 0L
             refreshPolicy.onTaskChanged(SystemClock.uptimeMillis())
@@ -781,6 +797,33 @@ class SlotTaskCoordinator(
 
     override fun onSlotBackgroundSwiped(drag: SlotTaskDrag) = dismissDraggedSlot(drag)
 
+    override fun onSlotHibernateToggled(drag: SlotTaskDrag): Boolean {
+        if (!validActiveSlot(drag.slotIndex) || recentSelectionPending || activeDrag != null) return false
+        val occupied = slotRecords[drag.slotIndex].state as? SlotState.Occupied ?: return false
+        if (occupied.taskId != drag.taskId || occupied.displayId != drag.displayId) return false
+        val slot = slots[drag.slotIndex]
+        val nextHibernated = !slot.isHibernated()
+        if (!slot.setHibernated(nextHibernated)) return false
+        if (nextHibernated) {
+            cancelIdleMonitor(drag.slotIndex)
+        } else {
+            scheduleIdleMonitor(drag.slotIndex, resetAnchor = true)
+        }
+        NeXtepLog.info("slot_hibernate", "Manual toggle slot=${drag.slotIndex} hibernated=$nextHibernated")
+        return true
+    }
+
+    override fun onSlotHibernateBadgeClicked(slotIndex: Int) {
+        if (!validActiveSlot(slotIndex) || recentSelectionPending || activeDrag != null) return
+        if (slotRecords[slotIndex].state !is SlotState.Occupied) return
+        val slot = slots[slotIndex]
+        if (!slot.isHibernated()) return
+        if (slot.setHibernated(false)) {
+            scheduleIdleMonitor(slotIndex, resetAnchor = true)
+            NeXtepLog.info("slot_hibernate", "Badge wake slot=$slotIndex")
+        }
+    }
+
     /** Return below existing tasks in one transaction, keeping the main app and
      * overview visible. This releases slot ownership without closing the task. */
     fun dismissDraggedSlot(drag: SlotTaskDrag): Boolean {
@@ -854,6 +897,8 @@ class SlotTaskCoordinator(
         val targetDisplay = checkNotNull(slots[targetIndex].displayId())
         check(sourceTask.displayId == sourceState.displayId)
         check(targetTask == null || targetTask.displayId == targetDisplay)
+        slots[sourceIndex].setHibernated(false, immediate = true)
+        slots[targetIndex].setHibernated(false, immediate = true)
         val sourceRecord = slotRecords[sourceIndex]
         val targetRecord = slotRecords[targetIndex]
         val sourceLayout = sourceRecord.originalLayout ?: defaultMainLayout(sourceTask.resizeMode)
@@ -1160,6 +1205,7 @@ class SlotTaskCoordinator(
         val mainIsExchangeable = mainTask != null &&
             isExchangeableMainTask(mainTask) &&
             mainTask.taskId != slotTask.taskId
+        slots[slotIndex].setHibernated(false, immediate = true)
 
         var slotMovedToMain = false
         var mainMovedToSlot = false
@@ -1973,13 +2019,90 @@ class SlotTaskCoordinator(
     private fun setState(index: Int, state: SlotState, reason: String) {
         val previous = slotRecords[index].state
         slotRecords[index].state = state
-        if (state !is SlotState.Occupied) slotRecords[index].mismatchSince = 0L
+        val taskChanged = previous !is SlotState.Occupied ||
+            (state as? SlotState.Occupied)?.taskId != previous.taskId
+        if (state !is SlotState.Occupied) {
+            slotRecords[index].mismatchSince = 0L
+            slotRecords[index].occupiedSinceMs = 0L
+            cancelIdleMonitor(index)
+            slots[index].setHibernated(false, immediate = true)
+        } else if (taskChanged) {
+            slotRecords[index].occupiedSinceMs = SystemClock.uptimeMillis()
+            slots[index].setHibernated(false, immediate = true)
+        }
         slots[index].view.showState(state)
+        if (state is SlotState.Occupied && taskChanged) {
+            scheduleIdleMonitor(index, resetAnchor = true)
+        }
         if (previous != state) {
             NeXtepLog.info(
                 "slot_state",
                 "slot=$index previous=$previous current=$state reason=$reason",
             )
+        }
+    }
+
+    private fun cancelIdleMonitor(index: Int) {
+        handler.removeCallbacks(idleCheckRunnables[index])
+    }
+
+    private fun scheduleIdleMonitor(index: Int, resetAnchor: Boolean = false) {
+        cancelIdleMonitor(index)
+        val slot = slots[index]
+        val record = slotRecords[index]
+        if (!active || suspended || !autoHibernateEnabled ||
+            record.state !is SlotState.Occupied || slot.isHibernated()
+        ) {
+            return
+        }
+        val now = SystemClock.uptimeMillis()
+        if (resetAnchor || record.occupiedSinceMs == 0L) record.occupiedSinceMs = now
+        val lastActivity = maxOf(record.occupiedSinceMs, slot.lastFrameUptimeMs)
+        when (val decision = SlotHibernateIdlePolicy.evaluate(
+            enabled = true,
+            timeoutSeconds = autoHibernateTimeoutSeconds,
+            lastActivityUptimeMs = lastActivity,
+            nowUptimeMs = now,
+        )) {
+            SlotHibernateIdlePolicy.IdleDecision.Disabled -> Unit
+            SlotHibernateIdlePolicy.IdleDecision.HibernateNow ->
+                handler.post(idleCheckRunnables[index])
+            is SlotHibernateIdlePolicy.IdleDecision.Reschedule ->
+                handler.postDelayed(idleCheckRunnables[index], decision.delayMs)
+        }
+    }
+
+    private fun onSlotIdleTimeout(index: Int) {
+        val slot = slots[index]
+        val record = slotRecords[index]
+        if (!active || suspended || !autoHibernateEnabled ||
+            record.state !is SlotState.Occupied || slot.isHibernated()
+        ) {
+            return
+        }
+        if (transitionInProgress || recentSelectionPending || activeDrag != null) {
+            handler.postDelayed(idleCheckRunnables[index], IDLE_DEFER_MS)
+            return
+        }
+        val now = SystemClock.uptimeMillis()
+        val lastActivity = maxOf(record.occupiedSinceMs, slot.lastFrameUptimeMs)
+        when (val decision = SlotHibernateIdlePolicy.evaluate(
+            enabled = true,
+            timeoutSeconds = autoHibernateTimeoutSeconds,
+            lastActivityUptimeMs = lastActivity,
+            nowUptimeMs = now,
+        )) {
+            SlotHibernateIdlePolicy.IdleDecision.Disabled -> Unit
+            SlotHibernateIdlePolicy.IdleDecision.HibernateNow -> {
+                if (slot.setHibernated(true)) {
+                    NeXtepLog.info(
+                        "slot_hibernate",
+                        "Auto-hibernated idle slot=$index timeout=${autoHibernateTimeoutSeconds}s",
+                    )
+                }
+            }
+            is SlotHibernateIdlePolicy.IdleDecision.Reschedule ->
+                handler.postDelayed(idleCheckRunnables[index], decision.delayMs)
         }
     }
 
@@ -2013,6 +2136,7 @@ class SlotTaskCoordinator(
         const val MAX_MIGRATION_RECOVERY_ATTEMPTS = 1
         const val PROMOTED_RECOVERY_DELAY_MS = 900L
         const val PROMOTED_RECOVERY_POLL_MS = 350L
+        const val IDLE_DEFER_MS = 1_000L
 
         internal fun isMigrationRecoveryActive(
             hasTask: Boolean,

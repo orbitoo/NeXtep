@@ -3,14 +3,17 @@ package com.elbert.nextep.display
 import android.app.ActivityOptions
 import android.content.Context
 import android.content.Intent
+import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.hardware.display.VirtualDisplay
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.view.Surface
 import android.view.TextureView
-import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.framework.UserTargetedActivityLauncher
+import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.workspace.WorkspaceLayoutProfile
-import android.graphics.Matrix
 
 class VirtualDisplaySlot(
     context: Context,
@@ -26,8 +29,11 @@ class VirtualDisplaySlot(
 
     private val applicationContext = context.applicationContext ?: context
     private val factory = VirtualDisplayFactory(applicationContext)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var active = false
     private var suspended = false
+    private var hibernated = false
+    private var awaitingWakeFrame = false
     private var surface: Surface? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var outputConnected = false
@@ -40,6 +46,14 @@ class VirtualDisplaySlot(
 
     internal var contentFrameSequence = 0L
         private set
+    internal var lastFrameUptimeMs = 0L
+        private set
+
+    private val wakeCoverFallback = Runnable {
+        if (!awaitingWakeFrame) return@Runnable
+        awaitingWakeFrame = false
+        view.finishWakeFrame()
+    }
 
     init {
         view.textureView.surfaceTextureListener = this
@@ -64,6 +78,56 @@ class VirtualDisplaySlot(
 
     fun isSuspended(): Boolean = suspended
 
+    fun isHibernated(): Boolean = hibernated
+
+    fun setHibernated(value: Boolean, immediate: Boolean = false): Boolean {
+        if (value) {
+            if (!active || suspended || virtualDisplay == null) return false
+            if (hibernated) return true
+            mainHandler.removeCallbacks(wakeCoverFallback)
+            awaitingWakeFrame = false
+            val source = layoutProfile?.source
+            val preview = view.captureFrozenCover(source?.width ?: view.width, source?.height ?: view.height)
+            hibernated = true
+            view.showHibernated(preview)
+            runCatching { updateOutputSurface(connected = false) }.onFailure {
+                NeXtepLog.warn("virtual_display", "Unable to hibernate output slot=$index", it)
+            }
+            NeXtepLog.info(
+                "virtual_display",
+                "Hibernated slot=$index displayId=${displayId()} hasCover=${preview != null}",
+            )
+            return true
+        }
+        if (!hibernated) {
+            if (immediate) {
+                mainHandler.removeCallbacks(wakeCoverFallback)
+                awaitingWakeFrame = false
+                view.clearHibernateCoverImmediate()
+            }
+            return true
+        }
+        hibernated = false
+        view.beginWakeFromHibernate(immediate = immediate)
+        lastFrameUptimeMs = SystemClock.uptimeMillis()
+        if (!suspended) {
+            val reconnected = runCatching { updateOutputSurface(connected = true) }
+                .onFailure { NeXtepLog.warn("virtual_display", "Unable to wake output slot=$index", it) }
+                .getOrDefault(false)
+            if (!immediate && reconnected) {
+                awaitingWakeFrame = true
+                mainHandler.removeCallbacks(wakeCoverFallback)
+                mainHandler.postDelayed(wakeCoverFallback, WAKE_COVER_FALLBACK_MS)
+            } else {
+                mainHandler.removeCallbacks(wakeCoverFallback)
+                awaitingWakeFrame = false
+                view.finishWakeFrame()
+            }
+        }
+        NeXtepLog.info("virtual_display", "Woke slot=$index displayId=${displayId()} immediate=$immediate")
+        return true
+    }
+
     fun activate() {
         active = true
         val textureView = if (freshSurfaceRequired) {
@@ -87,6 +151,10 @@ class VirtualDisplaySlot(
     fun deactivate() {
         active = false
         suspended = false
+        hibernated = false
+        awaitingWakeFrame = false
+        mainHandler.removeCallbacks(wakeCoverFallback)
+        lastFrameUptimeMs = 0L
         pendingLaunch = null
         releaseDisplay("workspace hidden")
         freshSurfaceRequired = true
@@ -95,6 +163,11 @@ class VirtualDisplaySlot(
     fun setSuspended(value: Boolean) {
         if (value) {
             suspended = true
+            mainHandler.removeCallbacks(wakeCoverFallback)
+            if (awaitingWakeFrame) {
+                awaitingWakeFrame = false
+                view.finishWakeFrame()
+            }
             // A null Surface turns the display off without removing its tasks/windows.
             // Keep our Surface alive so unlock can reconnect the same display.
             runCatching { updateOutputSurface(connected = false) }.onFailure {
@@ -103,8 +176,13 @@ class VirtualDisplaySlot(
             return
         }
         if (!suspended) return
-        if (!updateOutputSurface(connected = true)) return
+        if (SlotHibernateIdlePolicy.shouldConnectOutput(suspended = false, hibernated = hibernated) &&
+            !updateOutputSurface(connected = true)
+        ) {
+            return
+        }
         suspended = false
+        if (!hibernated) lastFrameUptimeMs = SystemClock.uptimeMillis()
         val textureView = view.textureView
         val texture = textureView.surfaceTexture
         if (active && textureView.isAvailable && texture != null) {
@@ -122,7 +200,7 @@ class VirtualDisplaySlot(
 
     /** Warm buffers behind hidden panels without resuming input, task moves or pending launches. */
     fun updateSuspendedOutput(screenAwake: Boolean) {
-        if (!active || !suspended) return
+        if (!SlotHibernateIdlePolicy.shouldWarmSuspendedOutput(active, suspended, hibernated)) return
         updateOutputSurface(connected = screenAwake)
     }
 
@@ -169,6 +247,7 @@ class VirtualDisplaySlot(
             setScale(transform.scaleX, transform.scaleY)
             postTranslate(transform.x, transform.y)
         })
+        view.updateHibernatePreviewTransform()
         // Reuse the surface when dimensions settle or only the sidebar's position changes.
         if (virtualDisplay != null && geometry == activeGeometry) {
             return
@@ -202,6 +281,12 @@ class VirtualDisplaySlot(
 
     override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {
         contentFrameSequence += 1
+        lastFrameUptimeMs = SystemClock.uptimeMillis()
+        if (awaitingWakeFrame) {
+            awaitingWakeFrame = false
+            mainHandler.removeCallbacks(wakeCoverFallback)
+            view.finishWakeFrame()
+        }
     }
 
     private fun createDisplay(texture: SurfaceTexture, width: Int, height: Int) {
@@ -213,6 +298,10 @@ class VirtualDisplaySlot(
         val createdSurface = Surface(texture)
         factory.create(index, geometry, createdSurface)
             .onSuccess { display ->
+                hibernated = false
+                awaitingWakeFrame = false
+                mainHandler.removeCallbacks(wakeCoverFallback)
+                lastFrameUptimeMs = SystemClock.uptimeMillis()
                 surface = createdSurface
                 virtualDisplay = display
                 outputConnected = true
@@ -249,6 +338,10 @@ class VirtualDisplaySlot(
 
     private fun releaseDisplay(reason: String) {
         val releasedDisplayId = virtualDisplay?.display?.displayId
+        hibernated = false
+        awaitingWakeFrame = false
+        mainHandler.removeCallbacks(wakeCoverFallback)
+        lastFrameUptimeMs = 0L
         runCatching { virtualDisplay?.setSurface(null) }
         virtualDisplay?.release()
         virtualDisplay = null
@@ -256,11 +349,16 @@ class VirtualDisplaySlot(
         activeGeometry = null
         surface?.release()
         surface = null
+        view.clearHibernateCoverImmediate()
         view.showWaiting()
         NeXtepLog.info(
             "virtual_display",
             "Released slot=$index generation=$surfaceGeneration reason=$reason",
         )
         listener?.onDisplayReleased(index, releasedDisplayId, reason)
+    }
+
+    private companion object {
+        const val WAKE_COVER_FALLBACK_MS = 250L
     }
 }
