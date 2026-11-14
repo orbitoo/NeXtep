@@ -237,7 +237,7 @@ internal object WorkspaceDisplayTransitionHook {
     }
 
     private fun isSlotDisplay(displayId: Int): Boolean =
-        displayManager?.getDisplay(displayId)?.name?.startsWith("NeXtep-slot-") == true
+        com.elbert.nextep.workspace.WorkspaceVirtualDisplayNames.isWorkspaceVirtualDisplay(displayManager?.getDisplay(displayId)?.name)
 
     private fun call(target: Any, name: String): Any? = target.javaClass.getMethod(name).invoke(target)
 
