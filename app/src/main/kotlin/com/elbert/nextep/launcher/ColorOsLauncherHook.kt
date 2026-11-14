@@ -13,6 +13,7 @@ import android.os.Process
 import android.os.UserHandle
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.systemui.SystemDialogLayoutController
+import com.elbert.nextep.trigger.TriggerBroadcastContract
 import com.elbert.nextep.workspace.SystemServerWorkspaceBridge
 import com.elbert.nextep.xposed.HookGuard
 import io.github.libxposed.api.XposedInterface
@@ -21,7 +22,7 @@ import java.lang.reflect.Method
 
 object ColorOsLauncherHook {
     fun install(module: XposedModule, packageName: String, classLoader: ClassLoader) {
-        if (packageName == "com.android.launcher" || packageName == "com.oplus.launcher") {
+        if (packageName in setOf("com.android.launcher", "com.oplus.launcher", "com.miui.home")) {
             HookGuard.run("launcher_night_icon") { LauncherNightIconHook.install(module) }
         }
         HookGuard.run("launcher_menu_geometry") { LauncherMenuGeometryController.install(module, classLoader) }
@@ -129,7 +130,7 @@ object ColorOsLauncherHook {
             dispatchTouchEvent.isAccessible = true
             module.hook(onPostResume).intercept(LauncherLifecycleHooker(module))
             module.hook(dispatchTouchEvent).intercept(LauncherTouchHooker())
-            if (packageName == ASSISTANT_SCREEN_PACKAGE) {
+            if (packageName in TriggerBroadcastContract.ASSISTANT_SCREEN_PACKAGES) {
                 installAssistantWindowHooks(module)
             }
             Instrumentation::class.java.declaredMethods
@@ -219,8 +220,6 @@ class AssistantViewRootHooker : XposedInterface.Hooker {
         return result
     }
 }
-
-private const val ASSISTANT_SCREEN_PACKAGE = "com.coloros.assistantscreen"
 
 class LauncherStartActivityHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {

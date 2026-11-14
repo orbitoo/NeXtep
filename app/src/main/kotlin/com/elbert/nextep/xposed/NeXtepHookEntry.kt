@@ -3,6 +3,7 @@ package com.elbert.nextep.xposed
 import android.util.Log
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.launcher.ColorOsLauncherHook
+import com.elbert.nextep.launcher.MiuiHomeAndAssistantHooks
 import com.elbert.nextep.multiapp.OplusMultiAppHook
 import com.elbert.nextep.framework.TaskSurfaceCompat
 import com.elbert.nextep.safety.EmergencyDisable
@@ -66,5 +67,9 @@ class NeXtepHookEntry : XposedModule() {
         if (EmergencyDisable.isRequested() || !FeatureGate.LAUNCHER_TRANSFORM.defaultEnabled) return
 
         ColorOsLauncherHook.install(this, packageName, param.defaultClassLoader)
+        when (packageName) {
+            "com.miui.home" -> MiuiHomeAndAssistantHooks.installMiuiHome(this, param.defaultClassLoader)
+            "com.miui.personalassistant" -> MiuiHomeAndAssistantHooks.installPersonalAssistant(this, param.defaultClassLoader)
+        }
     }
 }
