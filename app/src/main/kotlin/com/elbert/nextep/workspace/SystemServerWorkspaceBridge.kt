@@ -7,8 +7,11 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.Display
+import com.elbert.nextep.display.WORKSPACE_SLOT_COUNT
+import com.elbert.nextep.display.WorkspaceSlotCount
 import com.elbert.nextep.framework.HyperOsFreeformCompat
 import com.elbert.nextep.logging.NeXtepLog
+import com.elbert.nextep.trigger.TriggerGesture
 import java.util.concurrent.atomic.AtomicBoolean
 
 object SystemServerWorkspaceBridge {
@@ -17,6 +20,7 @@ object SystemServerWorkspaceBridge {
     private const val HEIGHT_KEY = "nextep_workspace_screen_height_v1"
     private const val SIDEBAR_SIDE_KEY = "nextep_workspace_sidebar_side_v1"
     private const val GEOMETRY_KEY = "nextep_workspace_geometry_v1"
+    internal const val TRIGGER_GESTURES_KEY = "nextep_workspace_trigger_gestures_v1"
     internal const val BLOCK_SYSTEM_DRAG_SHARE_KEY = "nextep_workspace_block_system_drag_share_v1"
     internal const val SCENE_REQUEST_KEY = "nextep_workspace_scene_request_v1"
     internal const val LANDSCAPE_MODE_KEY = "nextep_workspace_landscape_mode_v1"
@@ -195,6 +199,7 @@ object SystemServerWorkspaceBridge {
     private val geometryObservationStarted = AtomicBoolean(false)
     @Volatile private var observedGeometry: WorkspaceGeometry? = null
     @Volatile private var observedActive: Boolean = false
+    @Volatile private var observedGestures: Set<TriggerGesture> = TriggerGesture.DEFAULT_SET
 
     /** Subscribe once in system_server. WM animation callbacks then read only RAM. */
     fun startGeometryObservation(context: Context) {
@@ -212,11 +217,19 @@ object SystemServerWorkspaceBridge {
                         Settings.Global.getString(resolver, HyperOsFreeformCompat.MIUI_FREEFORM_TASKS_KEY),
                     )
                 }
+                fun refreshTriggerGestures() {
+                    observedGestures = TriggerGesture.decode(
+                        Settings.Global.getString(resolver, TRIGGER_GESTURES_KEY),
+                    )
+                }
                 val observer = object : ContentObserver(handler) {
                     override fun onChange(selfChange: Boolean) = refresh()
                 }
                 val freeformObserver = object : ContentObserver(handler) {
                     override fun onChange(selfChange: Boolean) = refreshFreeform()
+                }
+                val gesturesObserver = object : ContentObserver(handler) {
+                    override fun onChange(selfChange: Boolean) = refreshTriggerGestures()
                 }
                 resolver.registerContentObserver(Settings.Global.getUriFor(ACTIVE_KEY), false, observer)
                 resolver.registerContentObserver(Settings.Global.getUriFor(GEOMETRY_KEY), false, observer)
@@ -225,8 +238,14 @@ object SystemServerWorkspaceBridge {
                     false,
                     freeformObserver,
                 )
+                resolver.registerContentObserver(
+                    Settings.Global.getUriFor(TRIGGER_GESTURES_KEY),
+                    false,
+                    gesturesObserver,
+                )
                 refresh()
                 refreshFreeform()
+                refreshTriggerGestures()
             }.onFailure {
                 geometryObservationStarted.set(false)
                 NeXtepLog.warn("system_server_bridge", "Geometry observation unavailable", it)
@@ -237,6 +256,20 @@ object SystemServerWorkspaceBridge {
     fun observedActiveGeometry(): WorkspaceGeometry? = observedGeometry
 
     fun isObservedWorkspaceActive(): Boolean = observedActive
+
+    fun observedTriggerGestures(): Set<TriggerGesture> = observedGestures
+
+    fun publishTriggerGestures(context: Context, gestures: Set<TriggerGesture>) {
+        val normalized = TriggerGesture.normalize(gestures)
+        observedGestures = normalized
+        val encoded = TriggerGesture.encode(normalized)
+        runCatching {
+            val resolver = context.contentResolver
+            if (Settings.Global.getString(resolver, TRIGGER_GESTURES_KEY) != encoded) {
+                Settings.Global.putString(resolver, TRIGGER_GESTURES_KEY, encoded)
+            }
+        }.onFailure { NeXtepLog.warn("system_server_bridge", "Unable to publish trigger gestures", it) }
+    }
 
     fun isFastWorkspaceActive(context: Context): Boolean =
         if (geometryObservationStarted.get()) observedActive else isWorkspaceActive(context)
@@ -284,7 +317,7 @@ object SystemServerWorkspaceBridge {
                 Settings.Global.putString(resolver, GEOMETRY_KEY, listOf(
                     it.screenWidth, it.screenHeight, it.topHeight, it.sidebarWidth, it.sidebarSide.name,
                     it.navigationInsets.left, it.navigationInsets.top,
-                    it.navigationInsets.right, it.navigationInsets.bottom, it.displayRotation,
+                    it.navigationInsets.right, it.navigationInsets.bottom, it.displayRotation, it.slotCount,
                 ).joinToString(","))
             }
             Settings.Global.putInt(resolver, ACTIVE_KEY, if (active) 1 else 0)
@@ -373,7 +406,7 @@ object SystemServerWorkspaceBridge {
 
     private fun decodeGeometry(encoded: String): WorkspaceGeometry? = runCatching {
         val fields = encoded.split(',')
-        if (fields.size != 9 && fields.size != 10) return@runCatching null
+        if (fields.size !in 9..11) return@runCatching null
         WorkspaceGeometry(
             screenWidth = fields[0].toInt(),
             screenHeight = fields[1].toInt(),
@@ -383,7 +416,12 @@ object SystemServerWorkspaceBridge {
             navigationInsets = WorkspaceNavigationInsets(
                 fields[5].toInt(), fields[6].toInt(), fields[7].toInt(), fields[8].toInt(),
             ),
-            displayRotation = if (fields.size == 10) fields[9].toInt() else 0,
+            displayRotation = if (fields.size >= 10) fields[9].toInt() else 0,
+            slotCount = if (fields.size >= 11) {
+                WorkspaceSlotCount.normalize(fields[10].toInt())
+            } else {
+                WORKSPACE_SLOT_COUNT
+            },
         )
     }.getOrNull()
 }
