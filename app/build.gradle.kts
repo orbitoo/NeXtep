@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "io.github.lujinxin.nextep"
+    namespace = "com.elbert.nextep"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -11,7 +11,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "io.github.lujinxin.nextep"
+        applicationId = "com.elbert.nextep"
         minSdk = 35
         targetSdk = 36
         versionCode = 18
