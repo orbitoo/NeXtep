@@ -14,6 +14,8 @@ object TaskInfoCompat {
         val densityDpi: Int,
         val token: Any?,
         val vendorWindowed: Boolean = false,
+        val isVisible: Boolean = true,
+        val activityType: Int = 0,
     )
 
     fun readWindowState(info: ActivityManager.RunningTaskInfo): WindowState? {
@@ -43,6 +45,11 @@ object TaskInfoCompat {
             fieldNames = listOf("windowingMode", "mWindowingMode"),
             methodNames = listOf("getWindowingMode"),
         ) ?: 0
+        val activityType = readInt(
+            target = windowConfiguration,
+            fieldNames = listOf("activityType", "mActivityType"),
+            methodNames = listOf("getActivityType"),
+        ) ?: 0
         val resizeMode = readInt(
             target = info,
             fieldNames = listOf("resizeMode", "mResizeMode"),
@@ -70,7 +77,8 @@ object TaskInfoCompat {
         val scenario = extra?.let { readInt(it, listOf("mScenario"), listOf("getScenario")) }
         val vendorWindowed = scenario == 1 || scenario == 2 ||
             HyperOsFreeformCompat.isTrackedFreeformTask(taskId)
-        return WindowState(displayId, bounds, windowingMode, resizeMode, densityDpi, token, vendorWindowed)
+        val isVisible = readMember(info, listOf("isVisible", "visible", "mIsVisible"), listOf("isVisible")) as? Boolean ?: true
+        return WindowState(displayId, bounds, windowingMode, resizeMode, densityDpi, token, vendorWindowed, isVisible, activityType)
     }
 
     fun readUserId(info: ActivityManager.RunningTaskInfo): Int? = readInt(
@@ -91,7 +99,7 @@ object TaskInfoCompat {
         methodNames: List<String>,
     ): Int? = (readMember(target, fieldNames, methodNames) as? Number)?.toInt()
 
-    private fun readMember(
+    internal fun readMember(
         target: Any,
         fieldNames: List<String>,
         methodNames: List<String>,

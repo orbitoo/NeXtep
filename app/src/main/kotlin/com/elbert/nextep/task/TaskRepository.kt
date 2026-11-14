@@ -65,6 +65,7 @@ class TaskRepository(context: Context) {
         val token: Any?,
         val userId: Int?,
         val vendorWindowed: Boolean = false,
+        val isVisible: Boolean = true,
     )
 
     private val activityManager = context.getSystemService(ActivityManager::class.java)
@@ -132,6 +133,7 @@ class TaskRepository(context: Context) {
             token = windowState.token,
             userId = TaskInfoCompat.readUserId(info),
             vendorWindowed = windowState.vendorWindowed,
+            isVisible = windowState.isVisible,
         )
     }
 
