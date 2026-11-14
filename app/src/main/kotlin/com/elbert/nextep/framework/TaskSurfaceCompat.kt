@@ -10,9 +10,11 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Display
+import android.view.SurfaceControl
 import android.view.animation.DecelerateInterpolator
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.monitoring.WorkspaceEnergyDiagnostics
+import com.elbert.nextep.systemui.HyperOsTransitionAndFreeformHooks
 import com.elbert.nextep.workspace.WorkspaceGeometry
 import com.elbert.nextep.workspace.WorkspaceNavigationInsets
 import com.elbert.nextep.workspace.WorkspaceTransitionSpec
@@ -204,14 +206,26 @@ object TaskSurfaceCompat {
         cancelPreparedPromotion(taskId)
     }
 
+    internal fun screenCaptureClassCandidates(nestedClass: String? = null): List<String> = listOf(
+        "android.window.ScreenCaptureInternal",
+        "android.window.ScreenCapture",
+    ).map { prefix -> if (nestedClass == null) prefix else "$prefix\$$nestedClass" }
+
+    private fun resolveScreenCaptureClass(nestedClass: String? = null): Class<*> {
+        for (name in screenCaptureClassCandidates(nestedClass)) {
+            runCatching { return Class.forName(name) }
+        }
+        error("No ScreenCapture class found for nestedClass=$nestedClass")
+    }
+
     /** Transient exchange preview, using only this task's layers. Secure layers
      * remain excluded by ScreenCapture's defaults; failure just omits the preview. */
     fun capturePreview(taskId: Int, sourceCrop: Rect? = null, allowHomeRoot: Boolean = false): android.graphics.Bitmap? = runCatching {
         WorkspaceEnergyDiagnostics.previewCaptures.incrementAndGet()
         val leash = findTaskLeash(taskId, allowHomeRoot = allowHomeRoot) ?: return@runCatching null
         val surfaceType = Class.forName("android.view.SurfaceControl")
-        val captureType = Class.forName("android.window.ScreenCaptureInternal")
-        val builderType = Class.forName("android.window.ScreenCaptureInternal\$LayerCaptureArgs\$Builder")
+        val captureType = resolveScreenCaptureClass()
+        val builderType = resolveScreenCaptureClass("LayerCaptureArgs\$Builder")
         val builder = builderType.getConstructor(surfaceType).newInstance(leash)
         builderType.getMethod("setFrameScale", Float::class.javaPrimitiveType).invoke(builder, 1f)
         builderType.getMethod("setChildrenOnly", Boolean::class.javaPrimitiveType).invoke(builder, true)
@@ -232,8 +246,8 @@ object TaskSurfaceCompat {
     internal fun captureDisplayPreview(sourceCrop: Rect): android.graphics.Bitmap? = runCatching {
         WorkspaceEnergyDiagnostics.previewCaptures.incrementAndGet()
         if (sourceCrop.isEmpty) return@runCatching null
-        val captureType = Class.forName("android.window.ScreenCaptureInternal")
-        val builderType = Class.forName("android.window.ScreenCaptureInternal\$CaptureArgs\$Builder")
+        val captureType = resolveScreenCaptureClass()
+        val builderType = resolveScreenCaptureClass("CaptureArgs\$Builder")
         val builder = builderType.getConstructor().newInstance()
         builderType.getMethod("setSourceCrop", Rect::class.java).invoke(builder, sourceCrop)
         builderType.getMethod("setFrameScale", Float::class.javaPrimitiveType).invoke(builder, 1f)
@@ -620,6 +634,7 @@ object TaskSurfaceCompat {
         if (ownedTaskLeash(taskId) !== leash) return
         val frame = SurfaceFrame(scaleX, scaleY, positionX, positionY, crop)
         activePresentations[taskId]?.takeIf { it.leash === leash }?.frame = frame
+        if (HyperOsTransitionAndFreeformHooks.shouldDeferTaskSurfaceFit(taskId, leash)) return
         val loader = hostClassLoader ?: error("SystemUI host class loader is unavailable")
         val transactionClass = Class.forName(
             "android.view.SurfaceControl\$Transaction",
@@ -639,14 +654,22 @@ object TaskSurfaceCompat {
         }
     }
 
+    internal fun isPresentationTracked(taskId: Int, leash: Any): Boolean =
+        activePresentations[taskId]?.leash === leash ||
+            preparedPresentations[taskId]?.leash === leash
+
     private fun appendOwnedTransforms(transaction: Any) {
+        (transaction as? SurfaceControl.Transaction)?.let {
+            HyperOsTransitionAndFreeformHooks.appendActiveTransitionTransforms(it)
+        }
         // WM Shell's animation and finish transactions can be queued before presentation.
         // Fit at commit, after their writes, so no identity-sized frame reaches the display
         // between polling corrections. Use the current animation frame, not its final target.
         activePresentations.values.forEach { presentation ->
             if (activePresentations[presentation.taskId] !== presentation ||
                 ownedTaskLeash(presentation.taskId) !== presentation.leash ||
-                !isValid(presentation.leash)
+                !isValid(presentation.leash) ||
+                HyperOsTransitionAndFreeformHooks.shouldDeferTaskSurfaceFit(presentation.taskId, presentation.leash)
             ) return@forEach
             writeFrame(transaction, presentation.leash, presentation.frame)
         }
@@ -659,7 +682,8 @@ object TaskSurfaceCompat {
             // WM Shell submits the start transaction that makes the promoted task visible.
             if (preparedPresentations[presentation.taskId] !== presentation ||
                 ownedTaskLeash(presentation.taskId) !== presentation.leash ||
-                !isValid(presentation.leash)
+                !isValid(presentation.leash) ||
+                HyperOsTransitionAndFreeformHooks.shouldDeferTaskSurfaceFit(presentation.taskId, presentation.leash)
             ) return@forEach
             writeFrame(transaction, presentation.leash, presentation.frame)
         }
