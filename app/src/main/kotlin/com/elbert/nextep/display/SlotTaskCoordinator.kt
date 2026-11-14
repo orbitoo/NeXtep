@@ -38,6 +38,7 @@ class SlotTaskCoordinator(
         { _, move, finished -> try { move() } finally { finished() } },
     private val onInternalSlotDrag: (TaskSwitcherView, SlotTaskDrag) -> Boolean = { _, _ -> false },
     private val onInternalDragTouch: (android.view.View, android.view.MotionEvent) -> Boolean = { _, _ -> false },
+    private val beforeMainTaskChange: () -> Unit = {},
 ) : VirtualDisplaySlot.Listener, TaskSwitcherView.Listener {
     private data class SlotRecord(
         var state: SlotState = SlotState.Empty,
@@ -343,6 +344,7 @@ class SlotTaskCoordinator(
         val existing = findLaunchTask(component, normalized.targetUser())
 
         return runTransition("open main component=$component") {
+            beforeMainTaskChange()
             val currentMain = taskRepository.foregroundTask()
             // Reserve only a genuinely empty slot before promoting the target app.
             // A full sidebar must not turn this click into an exchange with an occupied slot.
@@ -438,6 +440,7 @@ class SlotTaskCoordinator(
                 taskRepository.findTask(occupied.taskId)?.userId == userId
         }
         if (sourceSlot >= 0) {
+            beforeMainTaskChange()
             val occupied = slotRecords[sourceSlot].state as SlotState.Occupied
             return runTransition("media swap slot=$sourceSlot task=${occupied.taskId}", mainSlotIndex = sourceSlot) {
                 swapWithMain(sourceSlot, occupied)
@@ -454,6 +457,7 @@ class SlotTaskCoordinator(
             return Result.failure(IllegalStateException("Media session launch target is not an Activity"))
         }
         return runTransition("media session main package=${session.packageName}") {
+            beforeMainTaskChange()
             val options = android.app.ActivityOptions.makeBasic().apply { setLaunchDisplayId(Display.DEFAULT_DISPLAY) }
             pendingIntent.send(applicationContext, 0, null, null, null, null, options.toBundle())
             handler.postDelayed({ reconcileForeground("media session launched") }, MAIN_LAUNCH_POLL_MS)
@@ -473,6 +477,7 @@ class SlotTaskCoordinator(
         val normalized = normalizeExternalIntent(sourceIntent)
             ?: return Result.failure(IllegalArgumentException("External content has no Activity"))
         val component = checkNotNull(normalized.component)
+        beforeMainTaskChange()
         return runTransition("open external component=$component") {
             UserTargetedActivityLauncher.start(applicationContext, normalized).getOrThrow()
             val generation = mainSelectionGeneration
@@ -625,6 +630,7 @@ class SlotTaskCoordinator(
                 return
             }
         }
+        beforeMainTaskChange()
         when (val state = slotRecords[slotIndex].state) {
             is SlotState.Occupied -> runTransition(
                 "swap slot=$slotIndex taskId=${state.taskId}",
@@ -864,6 +870,7 @@ class SlotTaskCoordinator(
 
     fun dropSlotIntoMain(drag: SlotTaskDrag): Boolean {
         if (activeDrag != drag || !matchesDrag(drag) || !active || suspended || recentSelectionPending) return false
+        beforeMainTaskChange()
         val mainTaskId = taskRepository.foregroundTask()?.taskId
         return runTransition("drag slot=${drag.slotIndex} to main", drag to null) {
             check(matchesDrag(drag) && taskRepository.foregroundTask()?.taskId == mainTaskId) { "Main task changed during drag" }
