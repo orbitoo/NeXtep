@@ -227,6 +227,14 @@ object SettingsScreen {
                         repository::setNavigationButtonsEnabled,
                     ), matchWidth())
                     addView(settingDivider(activity))
+                    addView(settingSwitchRow(
+                        activity,
+                        activity.getString(R.string.exit_on_lock_title),
+                        activity.getString(R.string.exit_on_lock_summary),
+                        settings.exitOnLock,
+                        repository::setExitOnLock,
+                    ), matchWidth())
+                    addView(settingDivider(activity))
                     addView(settingSliderRow(
                         activity,
                         activity.getString(R.string.frost_title),
