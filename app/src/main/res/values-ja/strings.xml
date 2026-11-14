@@ -189,4 +189,15 @@
     <string name="landscape_video_mode_turned_short">枠内回転</string>
     <string name="landscape_video_mode_top_short">上部固定</string>
     <string name="landscape_video_mode_fullscreen_short">全画面</string>
+    <string name="slot_count_title">サイドバーのスロット数</string>
+    <string name="slot_count_summary">サイドバーに表示する待機アプリの数を設定します（3〜6個）。</string>
+    <string name="slot_count_option">%d スロット</string>
+    <string name="trigger_gestures_title">クイック起動ジェスチャー</string>
+    <string name="trigger_gestures_summary">ワークスペースを切り替えるジェスチャーを選択します（ステータスバーの競合を避けるため、既定は左下・右下スワイプです）。</string>
+    <string name="trigger_gestures_none">無効</string>
+    <string name="trigger_gestures_count">%d 件有効</string>
+    <string name="trigger_gesture_bottom_left">左下隅から斜めスワイプ</string>
+    <string name="trigger_gesture_bottom_right">右下隅から斜めスワイプ</string>
+    <string name="trigger_gesture_two_finger">2本指で上下スワイプ</string>
+    <string name="trigger_gesture_status_bar_swipe">ステータスバーのスワイプ</string>
 </resources>

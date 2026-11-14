@@ -189,4 +189,15 @@
     <string name="landscape_video_mode_turned_short">主窗橫轉</string>
     <string name="landscape_video_mode_top_short">頂部置頂</string>
     <string name="landscape_video_mode_fullscreen_short">離開全螢幕</string>
+    <string name="slot_count_title">側欄應用程式數量</string>
+    <string name="slot_count_summary">設定側邊欄可同時保留的背景視窗數量（支援 3 至 6 個）。</string>
+    <string name="slot_count_option">%d 個視窗</string>
+    <string name="trigger_gestures_title">快速觸發手勢</string>
+    <string name="trigger_gestures_summary">選擇用來切換工作區的快速手勢（預設左下／右下底角斜滑，避免與狀態列靈動島衝突）。</string>
+    <string name="trigger_gestures_none">已關閉</string>
+    <string name="trigger_gestures_count">已啟用 %d 項</string>
+    <string name="trigger_gesture_bottom_left">左下底角斜滑</string>
+    <string name="trigger_gesture_bottom_right">右下底角斜滑</string>
+    <string name="trigger_gesture_two_finger">雙指上下滑動</string>
+    <string name="trigger_gesture_status_bar_swipe">狀態列橫滑</string>
 </resources>

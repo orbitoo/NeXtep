@@ -189,4 +189,15 @@
     <string name="landscape_video_mode_turned_short">主窗横转</string>
     <string name="landscape_video_mode_top_short">顶部置顶</string>
     <string name="landscape_video_mode_fullscreen_short">退出全屏</string>
+    <string name="slot_count_title">侧栏应用数量</string>
+    <string name="slot_count_summary">设置侧边栏可同时保留的后台窗口数量（支持 3 到 6 个）。</string>
+    <string name="slot_count_option">%d 个窗口</string>
+    <string name="trigger_gestures_title">快捷触发手势</string>
+    <string name="trigger_gestures_summary">选择用于切换工作区的快捷手势（默认左下/右下底角内斜滑，避免与灵动岛状态栏冲突）。</string>
+    <string name="trigger_gestures_none">已关闭</string>
+    <string name="trigger_gestures_count">已启用 %d 项</string>
+    <string name="trigger_gesture_bottom_left">左下底角斜滑</string>
+    <string name="trigger_gesture_bottom_right">右下底角斜滑</string>
+    <string name="trigger_gesture_two_finger">双指上下滑动</string>
+    <string name="trigger_gesture_status_bar_swipe">状态栏横滑</string>
 </resources>

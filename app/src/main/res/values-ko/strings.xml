@@ -189,4 +189,15 @@
     <string name="landscape_video_mode_turned_short">주 창 회전</string>
     <string name="landscape_video_mode_top_short">상단 고정</string>
     <string name="landscape_video_mode_fullscreen_short">전체 화면</string>
+    <string name="slot_count_title">사이드바 슬롯 수</string>
+    <string name="slot_count_summary">사이드바에 표시할 대기 앱 창 수를 설정합니다(3~6개).</string>
+    <string name="slot_count_option">%d개 슬롯</string>
+    <string name="trigger_gestures_title">빠른 실행 제스처</string>
+    <string name="trigger_gestures_summary">작업 공간을 전환할 제스처를 선택합니다(상태 표시줄 충돌을 피하기 위해 기본값은 왼쪽/오른쪽 하단 대각선 스와이프입니다).</string>
+    <string name="trigger_gestures_none">사용 안 함</string>
+    <string name="trigger_gestures_count">%d개 사용 중</string>
+    <string name="trigger_gesture_bottom_left">왼쪽 하단 모서리 스와이프</string>
+    <string name="trigger_gesture_bottom_right">오른쪽 하단 모서리 스와이프</string>
+    <string name="trigger_gesture_two_finger">두 손가락 위아래 스와이프</string>
+    <string name="trigger_gesture_status_bar_swipe">상태 표시줄 스와이프</string>
 </resources>

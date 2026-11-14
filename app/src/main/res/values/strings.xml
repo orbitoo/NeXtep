@@ -197,4 +197,15 @@
     <string name="landscape_video_mode_turned_short">Rotated main</string>
     <string name="landscape_video_mode_top_short">Top pinned</string>
     <string name="landscape_video_mode_fullscreen_short">Fullscreen</string>
+    <string name="slot_count_title">Sidebar slot count</string>
+    <string name="slot_count_summary">Choose how many background app slots are shown in the sidebar rail (3 to 6).</string>
+    <string name="slot_count_option">%d slots</string>
+    <string name="trigger_gestures_title">Quick trigger gestures</string>
+    <string name="trigger_gestures_summary">Choose which gestures toggle the workspace (defaults to bottom-left &amp; bottom-right corner swipes to avoid status-bar Dynamic Island conflicts).</string>
+    <string name="trigger_gestures_none">Disabled</string>
+    <string name="trigger_gestures_count">%d enabled</string>
+    <string name="trigger_gesture_bottom_left">Bottom-left corner swipe</string>
+    <string name="trigger_gesture_bottom_right">Bottom-right corner swipe</string>
+    <string name="trigger_gesture_two_finger">Two-finger vertical swipe</string>
+    <string name="trigger_gesture_status_bar_swipe">Status bar swipe</string>
 </resources>
