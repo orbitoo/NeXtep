@@ -39,6 +39,11 @@ object TriggerBroadcastContract {
     const val SYSTEM_UI_PACKAGE = "com.android.systemui"
     const val MODULE_PACKAGE = "com.elbert.nextep"
     const val ASSISTANT_SCREEN_PACKAGE = "com.coloros.assistantscreen"
+    const val MIUI_ASSISTANT_SCREEN_PACKAGE = "com.miui.personalassistant"
+    val ASSISTANT_SCREEN_PACKAGES = setOf(
+        ASSISTANT_SCREEN_PACKAGE,
+        MIUI_ASSISTANT_SCREEN_PACKAGE,
+    )
 
     fun queryIntent(targetPackage: String): Intent =
         targetIntent(ACTION_QUERY_WORKSPACE, targetPackage)
@@ -70,14 +75,24 @@ object TriggerBroadcastContract {
                 .putExtra(EXTRA_SYSTEMUI_IDENTITY, identity)
         }
 
-    fun assistantScreenSetIntent(context: Context, active: Boolean): Intent {
+    fun assistantScreenSetIntent(context: Context, active: Boolean): Intent =
+        assistantScreenSetIntent(context, active, ASSISTANT_SCREEN_PACKAGE)
+
+    fun assistantScreenSetIntents(context: Context, active: Boolean): List<Intent> =
+        ASSISTANT_SCREEN_PACKAGES.map { pkg -> assistantScreenSetIntent(context, active, pkg) }
+
+    private fun assistantScreenSetIntent(
+        context: Context,
+        active: Boolean,
+        targetPackage: String,
+    ): Intent {
         val identity = PendingIntent.getBroadcast(
             context,
             2,
             Intent(ACTION_SYSTEMUI_SET_WORKSPACE).setPackage(context.packageName),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        return targetIntent(ACTION_SYSTEMUI_SET_WORKSPACE, ASSISTANT_SCREEN_PACKAGE)
+        return targetIntent(ACTION_SYSTEMUI_SET_WORKSPACE, targetPackage)
             .putExtra(EXTRA_REQUESTED_ACTIVE, active)
             .putExtra(EXTRA_SYSTEMUI_IDENTITY, identity)
     }

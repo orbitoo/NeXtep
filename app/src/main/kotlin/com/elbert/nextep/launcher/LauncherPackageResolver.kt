@@ -8,10 +8,8 @@ object LauncherPackageResolver {
         TriggerBroadcastContract.resolveHomePackage(context) == context.packageName
 
     fun isWorkspaceSurface(context: Context): Boolean =
-        isCurrentHome(context) || context.packageName == ASSISTANT_SCREEN_PACKAGE
+        isCurrentHome(context) || isAssistantScreen(context)
 
     fun isAssistantScreen(context: Context): Boolean =
-        context.packageName == ASSISTANT_SCREEN_PACKAGE
-
-    private const val ASSISTANT_SCREEN_PACKAGE = "com.coloros.assistantscreen"
+        context.packageName in TriggerBroadcastContract.ASSISTANT_SCREEN_PACKAGES
 }

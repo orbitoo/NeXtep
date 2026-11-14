@@ -340,9 +340,8 @@ object SystemUiRuntime {
             TriggerBroadcastContract.systemUiSetIntent(applicationContext, false)?.let { intent ->
                 applicationContext.sendBroadcast(intent)
             }
-            applicationContext.sendBroadcast(
-                TriggerBroadcastContract.assistantScreenSetIntent(applicationContext, false),
-            )
+            TriggerBroadcastContract.assistantScreenSetIntents(applicationContext, false)
+                .forEach(applicationContext::sendBroadcast)
             WorkspaceStateBridge.requestInactiveFromSystemUi(applicationContext)
         }
     }
@@ -362,9 +361,8 @@ object SystemUiRuntime {
         TriggerBroadcastContract.systemUiSetIntent(applicationContext, active)?.let {
             applicationContext.sendBroadcast(it)
         }
-        applicationContext.sendBroadcast(
-            TriggerBroadcastContract.assistantScreenSetIntent(applicationContext, active),
-        )
+        TriggerBroadcastContract.assistantScreenSetIntents(applicationContext, active)
+            .forEach(applicationContext::sendBroadcast)
     }
 
     private fun setSidebarSideFromTopBar(side: SidebarSide) {
