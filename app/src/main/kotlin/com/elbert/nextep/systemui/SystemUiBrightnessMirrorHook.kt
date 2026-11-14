@@ -17,25 +17,10 @@ object SystemUiBrightnessMirrorHook {
     )
 
     fun install(module: XposedModule, classLoader: ClassLoader) {
-        val coordinatesInstalled = HookGuard.run("brightness_mirror_coordinates") {
-            val method = View::class.java.getDeclaredMethod("getLocationInWindow", IntArray::class.java)
-            method.isAccessible = true
-            module.hook(method).intercept(object : XposedInterface.Hooker {
-                override fun intercept(chain: XposedInterface.Chain): Any? {
-                    val result = chain.proceed()
-                    if ((positioningDepth.get() ?: 0) > 0) {
-                        val view = chain.thisObject as? View
-                        val location = chain.getArg(0) as? IntArray
-                        if (view != null && location != null) {
-                            HookGuard.run("brightness_mirror_coordinates_apply") {
-                                SystemUiRootTransformController.mapWindowLocationToContent(view, location)
-                            }
-                        }
-                    }
-                    return result
-                }
-            })
-        }
+        // View#getLocationInWindow is mapped globally for transformed shade roots by
+        // SystemUiShadeCoordinateScope; keep only brightness mirror caller deoptimization here
+        // so BrightnessMirrorController calls are not inlined past that hook or double-mapped.
+        val coordinatesInstalled = true
         if (!coordinatesInstalled) return
 
         positioningClasses.forEach { className ->
