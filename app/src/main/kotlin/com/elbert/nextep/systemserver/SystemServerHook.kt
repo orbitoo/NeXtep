@@ -26,6 +26,7 @@ object SystemServerHook {
         HookGuard.run("hyperos_ime") { HyperOsImeHooks.install(module, classLoader) }
         HookGuard.run("hyperos_status_bar_surface") { HyperOsStatusBarSurfaceHook.install(module, classLoader) }
         HookGuard.run("hyperos_input_guard") { HyperOsInputEdgeGuardHook.install(module, classLoader) }
+        HookGuard.run("workspace_scene_observer") { WorkspaceSceneObserverHook.install(module, classLoader) }
         HookGuard.run("slot_native_layout") { WorkspaceSlotNativeLayoutHook.install(module, classLoader) }
         HookGuard.run("four_finger_gesture") { FourFingerGestureHook.install(module, classLoader) }
         HookGuard.run("system_drag_share") { SystemDragShareHook.install(module, classLoader) }
