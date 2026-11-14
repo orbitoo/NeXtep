@@ -118,6 +118,10 @@ object SystemUiRuntime {
                 if (::windowController.isInitialized) {
                     windowController.setSlotBackgroundSwipeEnabled(workspaceConfig.slotBackgroundSwipeEnabled)
                     windowController.setNavigationButtonsEnabled(workspaceConfig.navigationButtonsEnabled)
+                    windowController.setSlotAutoHibernateConfig(
+                        workspaceConfig.slotAutoHibernateEnabled,
+                        workspaceConfig.slotAutoHibernateTimeoutSeconds,
+                    )
                 }
                 if (::fourFingerGestures.isInitialized) fourFingerGestures.updateConfig(workspaceConfig)
             }
@@ -125,6 +129,8 @@ object SystemUiRuntime {
                 "workspace_config",
                 "Applied statusBarGesture=${workspaceConfig.statusBarGestureEnabled} " +
                     "slotBackgroundSwipe=${workspaceConfig.slotBackgroundSwipeEnabled} " +
+                    "slotAutoHibernate=${workspaceConfig.slotAutoHibernateEnabled}@" +
+                    "${workspaceConfig.slotAutoHibernateTimeoutSeconds}s " +
                     "autoMinimizeMain=${workspaceConfig.autoMinimizeMainOnTopAppSwitch} " +
                     "navigationButtons=${workspaceConfig.navigationButtonsEnabled} " +
                     "blockSystemDragShare=${workspaceConfig.blockSystemDragShareEnabled}",

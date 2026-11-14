@@ -17,6 +17,7 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import com.elbert.nextep.R
 import com.elbert.nextep.config.AppLanguage
+import com.elbert.nextep.config.WorkspaceConfigContract
 import com.elbert.nextep.display.SlotState
 import com.elbert.nextep.display.SlotTaskCoordinator
 import com.elbert.nextep.display.SlotTaskDrag
@@ -56,6 +57,8 @@ class NeXtepWindowController(
     private var contentHighlightView: View? = null
     private var slotWindows: List<VirtualDisplaySlot> = emptyList()
     private var slotBackgroundSwipeEnabled = true
+    private var slotAutoHibernateEnabled = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED
+    private var slotAutoHibernateTimeoutSeconds = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS
     private var frostStrength = 50
     private val swapAnimator = WorkspaceSwapAnimator(context)
     private val internalDrag = WorkspaceInternalDragController(
@@ -363,6 +366,14 @@ class NeXtepWindowController(
         if (slotBackgroundSwipeEnabled == enabled) return
         slotBackgroundSwipeEnabled = enabled
         slotWindows.forEach { it.view.setBackgroundSwipeEnabled(enabled) }
+    }
+
+    fun setSlotAutoHibernateConfig(enabled: Boolean, timeoutSeconds: Int) {
+        val normalizedTimeout = WorkspaceConfigContract.normalizeSlotAutoHibernateTimeoutSeconds(timeoutSeconds)
+        if (slotAutoHibernateEnabled == enabled && slotAutoHibernateTimeoutSeconds == normalizedTimeout) return
+        slotAutoHibernateEnabled = enabled
+        slotAutoHibernateTimeoutSeconds = normalizedTimeout
+        slotCoordinator?.setAutoHibernateConfig(enabled, normalizedTimeout)
     }
 
     fun reconfigure(rotationOnly: Boolean = false): Result<WorkspaceGeometry> = runCatching {
@@ -705,7 +716,9 @@ class NeXtepWindowController(
                     internalDrag.start(source, WorkspaceInternalDragController.Payload.Slot(drag))
                 },
                 onInternalDragTouch = internalDrag::touch,
-            )
+            ).also {
+                it.setAutoHibernateConfig(slotAutoHibernateEnabled, slotAutoHibernateTimeoutSeconds)
+            }
         }
     }
 
