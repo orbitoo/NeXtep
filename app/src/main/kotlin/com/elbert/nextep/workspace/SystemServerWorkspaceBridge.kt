@@ -18,6 +18,180 @@ object SystemServerWorkspaceBridge {
     private const val SIDEBAR_SIDE_KEY = "nextep_workspace_sidebar_side_v1"
     private const val GEOMETRY_KEY = "nextep_workspace_geometry_v1"
     internal const val BLOCK_SYSTEM_DRAG_SHARE_KEY = "nextep_workspace_block_system_drag_share_v1"
+    internal const val SCENE_REQUEST_KEY = "nextep_workspace_scene_request_v1"
+    internal const val LANDSCAPE_MODE_KEY = "nextep_workspace_landscape_mode_v1"
+    internal const val ROTATED_BACK_REGION_KEY = "nextep_workspace_rotated_back_region_v1"
+
+    private val bridgeHandler = Handler(Looper.getMainLooper())
+
+    @Volatile
+    private var sceneObserverRegistered = false
+
+    @Volatile
+    private var cachedLandscapeMode: LandscapeVideoMode = LandscapeVideoMode.DEFAULT
+
+    @Volatile
+    private var cachedSceneRequest: WorkspaceSceneRequest? = null
+
+    @Volatile
+    private var cachedRotatedBackRegion: RotatedBackRegion? = null
+
+    private fun ensureSceneObservers(context: Context) {
+        if (sceneObserverRegistered) return
+        val appContext = context.applicationContext ?: context
+        synchronized(this) {
+            if (sceneObserverRegistered) return
+            val resolver = appContext.contentResolver
+            refreshLandscapeModeCache(appContext)
+            refreshSceneRequestCache(appContext)
+            refreshRotatedBackRegionCache(appContext)
+            val observer = object : android.database.ContentObserver(
+                android.os.Handler(android.os.Looper.getMainLooper()),
+            ) {
+                override fun onChange(selfChange: Boolean, uri: android.net.Uri?) {
+                    when (uri?.lastPathSegment) {
+                        LANDSCAPE_MODE_KEY -> refreshLandscapeModeCache(appContext)
+                        SCENE_REQUEST_KEY -> refreshSceneRequestCache(appContext)
+                        ROTATED_BACK_REGION_KEY -> refreshRotatedBackRegionCache(appContext)
+                        else -> {
+                            refreshLandscapeModeCache(appContext)
+                            refreshSceneRequestCache(appContext)
+                            refreshRotatedBackRegionCache(appContext)
+                        }
+                    }
+                }
+            }
+            runCatching {
+                resolver.registerContentObserver(
+                    android.provider.Settings.Global.getUriFor(LANDSCAPE_MODE_KEY),
+                    false,
+                    observer,
+                )
+                resolver.registerContentObserver(
+                    android.provider.Settings.Global.getUriFor(SCENE_REQUEST_KEY),
+                    false,
+                    observer,
+                )
+                resolver.registerContentObserver(
+                    android.provider.Settings.Global.getUriFor(ROTATED_BACK_REGION_KEY),
+                    false,
+                    observer,
+                )
+                sceneObserverRegistered = true
+            }
+        }
+    }
+
+    private fun refreshLandscapeModeCache(context: Context): LandscapeVideoMode {
+        val raw = runCatching {
+            android.provider.Settings.Global.getString(context.contentResolver, LANDSCAPE_MODE_KEY)
+        }.getOrNull()
+        return LandscapeVideoMode.fromWireValue(raw).also { cachedLandscapeMode = it }
+    }
+
+    private fun refreshSceneRequestCache(context: Context): WorkspaceSceneRequest? {
+        val raw = runCatching {
+            android.provider.Settings.Global.getString(context.contentResolver, SCENE_REQUEST_KEY)
+        }.getOrNull()
+        return WorkspaceSceneRequest.decode(raw).also { cachedSceneRequest = it }
+    }
+
+    private fun refreshRotatedBackRegionCache(context: Context): RotatedBackRegion? {
+        val raw = runCatching {
+            android.provider.Settings.Global.getString(context.contentResolver, ROTATED_BACK_REGION_KEY)
+        }.getOrNull()
+        return RotatedBackRegion.decode(raw).also { cachedRotatedBackRegion = it }
+    }
+
+    fun startSceneObservation(context: Context) {
+        ensureSceneObservers(context)
+    }
+
+    fun landscapeVideoMode(context: Context): LandscapeVideoMode {
+        ensureSceneObservers(context)
+        return cachedLandscapeMode
+    }
+
+    fun publishLandscapeVideoMode(context: Context, mode: LandscapeVideoMode) {
+        cachedLandscapeMode = mode
+        runCatching {
+            android.provider.Settings.Global.putString(
+                context.contentResolver,
+                LANDSCAPE_MODE_KEY,
+                mode.wireValue,
+            )
+        }
+    }
+
+    fun latestSceneRequest(context: Context): WorkspaceSceneRequest? {
+        ensureSceneObservers(context)
+        return cachedSceneRequest
+    }
+
+    fun publishSceneRequest(context: Context, request: WorkspaceSceneRequest?) {
+        cachedSceneRequest = request
+        runCatching {
+            android.provider.Settings.Global.putString(
+                context.contentResolver,
+                SCENE_REQUEST_KEY,
+                request?.encode().orEmpty(),
+            )
+        }
+    }
+
+    /** Updates the in-process cache immediately and persists via main looper outside WM locks. */
+    fun publishSceneRequestAsync(context: Context, request: WorkspaceSceneRequest?) {
+        cachedSceneRequest = request
+        val appContext = context.applicationContext ?: context
+        val encoded = request?.encode().orEmpty()
+        bridgeHandler.post {
+            runCatching {
+                android.provider.Settings.Global.putString(
+                    appContext.contentResolver,
+                    SCENE_REQUEST_KEY,
+                    encoded,
+                )
+            }
+        }
+    }
+
+    fun publishRotatedBackRegion(context: Context, region: RotatedBackRegion?) {
+        cachedRotatedBackRegion = region
+        runCatching {
+            android.provider.Settings.Global.putString(
+                context.contentResolver,
+                ROTATED_BACK_REGION_KEY,
+                region?.encode().orEmpty(),
+            )
+        }
+    }
+
+    fun isPointInRotatedBackRegion(context: Context, rawX: Float, rawY: Float): Boolean {
+        ensureSceneObservers(context)
+        if (activeGeometry(context) == null) return false
+        return cachedRotatedBackRegion?.contains(rawX, rawY) == true
+    }
+
+    fun observeSceneRequests(
+        context: Context,
+        onChanged: (WorkspaceSceneRequest?) -> Unit,
+    ): android.database.ContentObserver? {
+        val observer = object : android.database.ContentObserver(
+            android.os.Handler(android.os.Looper.getMainLooper()),
+        ) {
+            override fun onChange(selfChange: Boolean) {
+                onChanged(refreshSceneRequestCache(context))
+            }
+        }
+        return runCatching {
+            context.contentResolver.registerContentObserver(
+                android.provider.Settings.Global.getUriFor(SCENE_REQUEST_KEY),
+                false,
+                observer,
+            )
+            observer
+        }.getOrNull()
+    }
     private val geometryObservationStarted = AtomicBoolean(false)
     @Volatile private var observedGeometry: WorkspaceGeometry? = null
     @Volatile private var observedActive: Boolean = false
@@ -63,6 +237,9 @@ object SystemServerWorkspaceBridge {
     fun observedActiveGeometry(): WorkspaceGeometry? = observedGeometry
 
     fun isObservedWorkspaceActive(): Boolean = observedActive
+
+    fun isFastWorkspaceActive(context: Context): Boolean =
+        if (geometryObservationStarted.get()) observedActive else isWorkspaceActive(context)
 
     fun isGeometryObservationStarted(): Boolean = geometryObservationStarted.get()
 
