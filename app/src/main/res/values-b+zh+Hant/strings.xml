@@ -29,6 +29,13 @@
     <string name="navigation_buttons_summary">使用三鍵導覽時開啟，手勢導覽請關閉。變更系統導覽方式後，重新切換一次此開關。</string>
     <string name="exit_on_lock_title">鎖定螢幕時退出工作區</string>
     <string name="exit_on_lock_summary">開啟後鎖屏自動退出多視窗並釋放小視窗虛擬螢幕，解鎖後回到一般介面，更省電。</string>
+    <string name="slot_auto_hibernate_title">小視窗閒置自動休眠省電</string>
+    <string name="slot_auto_hibernate_summary">小視窗持續靜止無新畫面時暫停虛擬螢幕算繪以省電；也可向內橫滑手動休眠或喚醒。</string>
+    <string name="slot_auto_hibernate_timeout_title">閒置休眠等待時間</string>
+    <string name="slot_auto_hibernate_timeout_summary">小視窗超過設定時間無新影格更新後自動休眠。</string>
+    <string name="slot_auto_hibernate_timeout_value">%1$d 秒</string>
+    <string name="slot_hibernated_badge">⏸ 已休眠</string>
+    <string name="slot_hibernated_badge_description">小視窗已休眠，點選角標可原地喚醒</string>
     <string name="frost_title">霧面玻璃</string>
     <string name="frost_summary">調整控制區域和小視窗背景的霧面強度。</string>
     <string name="frost_strength">霧面強度</string>

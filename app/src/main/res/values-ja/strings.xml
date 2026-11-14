@@ -29,6 +29,13 @@
     <string name="navigation_buttons_summary">3 ボタン操作ではオンに、ジェスチャー操作ではオフにしてください。システムの操作方式を変更した後は、このスイッチを切り替え直してください。</string>
     <string name="exit_on_lock_title">画面ロック時にワークスペースを終了</string>
     <string name="exit_on_lock_summary">オンにすると画面ロック時に通常モードへ戻り、ロック解除後に自動再開せず省電力になります。</string>
+    <string name="slot_auto_hibernate_title">小ウィンドウのアイドル自動休止</string>
+    <string name="slot_auto_hibernate_summary">新しい描画がない小ウィンドウの仮想画面出力を一時停止して節電します。内側にスワイプして手動切り替えも可能です。</string>
+    <string name="slot_auto_hibernate_timeout_title">自動休止までの待機時間</string>
+    <string name="slot_auto_hibernate_timeout_summary">設定時間内に新しいフレームがないと自動で休止します。</string>
+    <string name="slot_auto_hibernate_timeout_value">%1$d 秒</string>
+    <string name="slot_hibernated_badge">⏸ 休止中</string>
+    <string name="slot_hibernated_badge_description">小ウィンドウは休止中です。バッジをタップしてその場で再開します。</string>
     <string name="frost_title">すりガラス</string>
     <string name="frost_summary">操作エリアと小ウィンドウの背景のぼかし強度を調整します。</string>
     <string name="frost_strength">ぼかしの強度</string>

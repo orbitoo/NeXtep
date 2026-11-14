@@ -29,6 +29,13 @@
     <string name="navigation_buttons_summary">3버튼 탐색에서는 켜고 제스처 탐색에서는 끄세요. 시스템 탐색 방식을 변경한 후 이 스위치를 다시 전환하세요.</string>
     <string name="exit_on_lock_title">화면 잠금 시 작업 공간 종료</string>
     <string name="exit_on_lock_summary">켜면 화면을 잠글 때 일반 모드로 돌아가며 잠금 해제 후 자동 복구하지 않아 배터리를 절약합니다.</string>
+    <string name="slot_auto_hibernate_title">유휴 작은 창 자동 절전</string>
+    <string name="slot_auto_hibernate_summary">새 화면 갱신이 없는 작은 창의 렌더링을 일시 중지해 배터리를 절약합니다. 안쪽으로 스와이프해 수동 전환할 수도 있습니다.</string>
+    <string name="slot_auto_hibernate_timeout_title">자동 절전 대기 시간</string>
+    <string name="slot_auto_hibernate_timeout_summary">설정한 시간 동안 새 프레임이 없으면 작은 창을 자동으로 절전합니다.</string>
+    <string name="slot_auto_hibernate_timeout_value">%1$d초</string>
+    <string name="slot_hibernated_badge">⏸ 절전 중</string>
+    <string name="slot_hibernated_badge_description">작은 창이 절전 중입니다. 배지를 탭하여 제자리에서 깨웁니다.</string>
     <string name="frost_title">반투명 유리</string>
     <string name="frost_summary">제어 영역과 작은 창 배경의 흐림 강도를 조절합니다.</string>
     <string name="frost_strength">흐림 강도</string>
