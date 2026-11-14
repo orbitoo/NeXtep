@@ -145,7 +145,9 @@ object MiuiHomeAndAssistantHooks {
                         SystemServerWorkspaceBridge.startGeometryObservation(context)
                     }
                     val geom = SystemServerWorkspaceBridge.activeGeometry(context) ?: return result
-                    if (geom.isPointInClaimedChrome(event.rawX, event.rawY)) {
+                    if (geom.isPointInClaimedChrome(event.rawX, event.rawY) ||
+                        SystemServerWorkspaceBridge.isPointInRotatedBackRegion(context, event.rawX, event.rawY)
+                    ) {
                         runCatching { shouldRedirectField?.setBoolean(view, false) }
                         NeXtepLog.debug(
                             "miui_edge_back",

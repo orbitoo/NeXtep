@@ -119,6 +119,7 @@ object HyperOsInputEdgeGuardHook {
     private fun onSystemReady(context: Context, windowManagerService: Any) {
         wmContext = context
         SystemServerWorkspaceBridge.startGeometryObservation(context)
+        SystemServerWorkspaceBridge.startSceneObservation(context)
         resolveMiuiHomeUid(context)
 
         mainHandler.post {
@@ -265,9 +266,14 @@ object HyperOsInputEdgeGuardHook {
                     override fun intercept(chain: XposedInterface.Chain): Any? {
                         val geometry = SystemServerWorkspaceBridge.observedActiveGeometry()
                             ?: return chain.proceed()
+                        val context = wmContext ?: contextField?.let { f ->
+                            runCatching { f.get(chain.thisObject) as? Context }.getOrNull()
+                        }?.also { wmContext = it }
                         val elapsed = SystemClock.uptimeMillis() - lastDownUptimeMs
+                        val inRotatedBackRegion = context != null &&
+                            SystemServerWorkspaceBridge.isPointInRotatedBackRegion(context, lastDownRawX, lastDownRawY)
                         if (elapsed in 0..REDIRECT_BLOCK_WINDOW_MS &&
-                            geometry.isPointInClaimedChrome(lastDownRawX, lastDownRawY)
+                            (geometry.isPointInClaimedChrome(lastDownRawX, lastDownRawY) || inRotatedBackRegion)
                         ) {
                             NeXtepLog.debug(
                                 "hyperos_edge_redirect",
