@@ -15,6 +15,7 @@ import android.view.Display
 import com.elbert.nextep.config.WorkspaceTopConfig
 import com.elbert.nextep.task.TaskRepository
 import com.elbert.nextep.trigger.TriggerBroadcastContract
+import com.elbert.nextep.trigger.TriggerGesture
 
 /** Applies the current SystemUI policy before accepting a system-observed gesture. */
 internal class FourFingerGestureController(
@@ -26,7 +27,10 @@ internal class FourFingerGestureController(
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val taskRepository = TaskRepository(context)
-    private var config = WorkspaceTopConfig(fourFingerGestureEnabled = false)
+    private var config = WorkspaceTopConfig(
+        fourFingerGestureEnabled = false,
+        triggerGestures = emptySet(),
+    )
     private val gameManager by lazy { runCatching { context.getSystemService(GameManager::class.java) }.getOrNull() }
     private val gameModeMethod by lazy {
         runCatching { gameManager?.javaClass?.getMethod("getGameMode", String::class.java) }.getOrNull()
@@ -48,6 +52,23 @@ internal class FourFingerGestureController(
         // Return the ordered acknowledgement first so system_server can cancel the
         // recognized contact stream. Recheck policy before changing the workspace.
         handler.post { if (allowed()) requestWorkspace(active) }
+        return true
+    }
+
+    fun handleTriggerGesture(intent: Intent): Boolean {
+        val gesture = TriggerGesture.fromKey(
+            intent.getStringExtra(TriggerBroadcastContract.EXTRA_TRIGGER_GESTURE),
+        ) ?: return false
+        val eventTime = intent.getLongExtra(TriggerBroadcastContract.EXTRA_GESTURE_EVENT_TIME, -1L)
+        fun allowed(): Boolean {
+            if (SystemClock.uptimeMillis() - eventTime !in 0L..400L) return false
+            if (gesture !in config.triggerGestures || !canChangeWorkspace() || !screenReady()) return false
+            return isWorkspaceActive() || policyAllowsGesture()
+        }
+        if (!allowed()) return false
+        handler.post {
+            if (allowed()) requestWorkspace(!isWorkspaceActive())
+        }
         return true
     }
 

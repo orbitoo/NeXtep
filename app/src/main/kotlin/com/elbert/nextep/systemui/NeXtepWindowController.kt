@@ -24,7 +24,7 @@ import com.elbert.nextep.display.SlotTaskCoordinator
 import com.elbert.nextep.display.SlotTaskDrag
 import com.elbert.nextep.display.TopPinnedPaneHost
 import com.elbert.nextep.display.VirtualDisplaySlot
-import com.elbert.nextep.display.WORKSPACE_SLOT_COUNT
+import com.elbert.nextep.display.WorkspaceSlotCount
 import com.elbert.nextep.framework.TaskSurfaceCompat
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.safety.FeatureGate
@@ -385,6 +385,34 @@ class NeXtepWindowController(
 
     fun setNavigationButtonsEnabled(enabled: Boolean) {
         viewport.setNavigationButtonsEnabled(enabled)
+    }
+
+    fun setSlotCount(count: Int) {
+        val normalized = WorkspaceSlotCount.normalize(count)
+        if (initialized && slotWindows.size != normalized && (workspaceVisible || suspended)) {
+            onExitRequested()
+        }
+        if (viewport.slotCount() != normalized) {
+            viewport.setSlotCount(normalized)
+        }
+        val panel = sidebarView
+        if (initialized && panel != null && slotWindows.size != normalized) {
+            cancelDragVisuals()
+            slotCoordinator?.deactivate()
+            slotWindows.forEach { it.deactivate() }
+            // Stop any exit fade-out so newly installed slots never render or create
+            // SurfaceTextures at the old view size before the next activate().
+            panel.animate().cancel()
+            panel.visibility = View.GONE
+            panel.alpha = 0f
+            panel.removeAllViews()
+            slotCoordinator = null
+            slotWindows = emptyList()
+            val geometry = geometry()
+            applyWindowGeometry(geometry, refreshControls = workspaceVisible)
+            installSidebarSlots(panel, geometry)
+            FloatingWindowTouchPassThroughController.notifyFloatingWindowsChanged()
+        }
     }
 
     fun setSlotBackgroundSwipeEnabled(enabled: Boolean) {
@@ -878,33 +906,36 @@ class NeXtepWindowController(
         sidebarView = this
         FloatingWindowTouchPassThroughController.installSidebarPassThrough(this)
         setBackgroundColor(Color.TRANSPARENT)
-        if (FeatureGate.VIRTUAL_DISPLAY_SLOTS.defaultEnabled) {
-            slotWindows = List(WORKSPACE_SLOT_COUNT) { index -> VirtualDisplaySlot(context, index) }
-            slotWindows.forEach { slot ->
-                slot.view.setBackgroundSwipeEnabled(slotBackgroundSwipeEnabled)
-                addView(slot.view)
-            }
-            applySlotLayout(this, geometry)
-            slotCoordinator = SlotTaskCoordinator(
-                context = context,
-                slots = slotWindows,
-                mainTaskPresenter = mainTaskPresenter,
-                geometryProvider = ::geometry,
-                returnAfterSharing = SystemUiRuntime::shouldReturnAfterSharing,
-                onSwapAnimation = ::animateDragSwap,
-                onMainSlotAnimation = ::animateMainSlotSwap,
-                onInternalSlotDrag = { source, drag ->
-                    internalDrag.start(source, WorkspaceInternalDragController.Payload.Slot(drag))
-                },
-                onInternalDragTouch = internalDrag::touch,
-                beforeMainTaskChange = {
-                    if (rotatedMainHost?.isActive() == true) {
-                        rotatedMainHost?.exitToPrimaryDisplay(presentInMain = false)
-                    }
-                },
-            ).also {
-                it.setAutoHibernateConfig(slotAutoHibernateEnabled, slotAutoHibernateTimeoutSeconds)
-            }
+        installSidebarSlots(this, geometry)
+    }
+
+    private fun installSidebarSlots(panel: FrameLayout, geometry: WorkspaceGeometry) {
+        if (!FeatureGate.VIRTUAL_DISPLAY_SLOTS.defaultEnabled) return
+        slotWindows = List(geometry.slotCount) { index -> VirtualDisplaySlot(context, index) }
+        slotWindows.forEach { slot ->
+            slot.view.setBackgroundSwipeEnabled(slotBackgroundSwipeEnabled)
+            panel.addView(slot.view)
+        }
+        applySlotLayout(panel, geometry)
+        slotCoordinator = SlotTaskCoordinator(
+            context = context,
+            slots = slotWindows,
+            mainTaskPresenter = mainTaskPresenter,
+            geometryProvider = ::geometry,
+            returnAfterSharing = SystemUiRuntime::shouldReturnAfterSharing,
+            onSwapAnimation = ::animateDragSwap,
+            onMainSlotAnimation = ::animateMainSlotSwap,
+            onInternalSlotDrag = { source, drag ->
+                internalDrag.start(source, WorkspaceInternalDragController.Payload.Slot(drag))
+            },
+            onInternalDragTouch = internalDrag::touch,
+            beforeMainTaskChange = {
+                if (rotatedMainHost?.isActive() == true) {
+                    rotatedMainHost?.exitToPrimaryDisplay(presentInMain = false)
+                }
+            },
+        ).also {
+            it.setAutoHibernateConfig(slotAutoHibernateEnabled, slotAutoHibernateTimeoutSeconds)
         }
     }
 
