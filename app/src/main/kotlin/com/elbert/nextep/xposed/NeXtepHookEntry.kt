@@ -68,7 +68,13 @@ class NeXtepHookEntry : XposedModule() {
 
         ColorOsLauncherHook.install(this, packageName, param.defaultClassLoader)
         when (packageName) {
-            "com.miui.home" -> MiuiHomeAndAssistantHooks.installMiuiHome(this, param.defaultClassLoader)
+            "com.miui.home" -> {
+                MiuiHomeAndAssistantHooks.installMiuiHome(this, param.defaultClassLoader)
+                com.elbert.nextep.launcher.LauncherScaledCoordinateScope.installMiuiHome(
+                    this,
+                    param.defaultClassLoader,
+                )
+            }
             "com.miui.personalassistant" -> MiuiHomeAndAssistantHooks.installPersonalAssistant(this, param.defaultClassLoader)
         }
     }
