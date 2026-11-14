@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.SurfaceControl
 import android.view.WindowManager
+import com.elbert.nextep.framework.HyperOsEnvironment
 import com.elbert.nextep.framework.HyperOsFreeformCompat
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.workspace.SystemServerWorkspaceBridge
@@ -33,6 +34,10 @@ class NativeFloatingWindowLayerHooker : XposedInterface.Hooker {
     private val fields = ConcurrentHashMap<String, Field>()
     private var reportedFailure = false
     private val observationRequested = AtomicBoolean(false)
+    private val miuiStubInitialized = AtomicBoolean(false)
+    @Volatile private var miuiStubGetInstance: Method? = null
+    @Volatile private var miuiStubGetStack: Method? = null
+    @Volatile private var miuiStubGetMode: Method? = null
     private val observationHandler by lazy { Handler(Looper.getMainLooper()) }
     private var workspaceObserver: ContentObserver? = null
     @Volatile private var workspaceActive: Boolean? = null
@@ -168,9 +173,36 @@ class NativeFloatingWindowLayerHooker : XposedInterface.Hooker {
         val mode = call(task, "getWindowingMode") as? Int
         if (mode == 5 || mode == 2) return true // Freeform and picture-in-picture.
         if (HyperOsFreeformCompat.isMiuiFreeformTaskContainer(task)) return true
+        if (HyperOsEnvironment.isHyperOs()) {
+            val taskId = HyperOsFreeformCompat.readTaskId(task)
+            if (taskId != null && isMiuiFreeFormTaskSync(taskId)) return true
+        }
         val config = call(task, "getConfiguration") as? Configuration ?: return false
         val extra = field(config, "mOplusExtraConfiguration") ?: return false
         return call(extra, "getScenario") in setOf(1, 2)
+    }
+
+    private fun isMiuiFreeFormTaskSync(taskId: Int): Boolean {
+        if (taskId < 0) return false
+        if (miuiStubInitialized.compareAndSet(false, true)) {
+            runCatching {
+                val stubClass = Class.forName("com.android.server.wm.MiuiFreeFormManagerServiceStub")
+                miuiStubGetInstance = stubClass.getMethod("getInstance").apply { isAccessible = true }
+                miuiStubGetStack = runCatching {
+                    stubClass.getMethod("getMiuiFreeFormActivityStack", Int::class.javaPrimitiveType)
+                        .apply { isAccessible = true }
+                }.getOrNull()
+                miuiStubGetMode = runCatching {
+                    stubClass.getMethod("getFreeFormWindowMode", Int::class.javaPrimitiveType)
+                        .apply { isAccessible = true }
+                }.getOrNull()
+            }
+        }
+        val instance = miuiStubGetInstance?.let { runCatching { it.invoke(null) }.getOrNull() } ?: return false
+        val hasStack = miuiStubGetStack?.let { runCatching { it.invoke(instance, taskId) != null }.getOrDefault(false) } == true
+        if (hasStack) return true
+        val mode = miuiStubGetMode?.let { runCatching { it.invoke(instance, taskId) as? Int }.getOrNull() } ?: 0
+        return mode > 0
     }
 
     private fun field(target: Any, name: String): Any? {
@@ -184,7 +216,7 @@ class NativeFloatingWindowLayerHooker : XposedInterface.Hooker {
     private fun call(target: Any, name: String, vararg args: Any): Any? {
         val key = "${target.javaClass.name}#$name/${args.joinToString { it.javaClass.name }}"
         val method = methods[key] ?: generateSequence(target.javaClass as Class<*>?) { it.superclass }
-            .flatMap { it.declaredMethods.asSequence() }.first { method ->
+            .flatMap { it.declaredMethods.asSequence() }.firstOrNull { method ->
                 method.name == name && method.parameterTypes.size == args.size &&
                     method.parameterTypes.indices.all { i ->
                         val type = method.parameterTypes[i]
@@ -192,7 +224,7 @@ class NativeFloatingWindowLayerHooker : XposedInterface.Hooker {
                             (type == Int::class.javaPrimitiveType && args[i] is Int) ||
                             (type == Boolean::class.javaPrimitiveType && args[i] is Boolean)
                     }
-            }.apply { isAccessible = true; methods[key] = this }
+            }?.apply { isAccessible = true; methods[key] = this } ?: return null
         return method.invoke(target, *args)
     }
 

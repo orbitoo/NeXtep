@@ -58,7 +58,7 @@ object HyperOsFreeformCompat {
         trackedFreeformTaskIds.clear()
     }
 
-    private fun readTaskId(container: Any?): Int? {
+    internal fun readTaskId(container: Any?): Int? {
         if (container == null) return null
         val type = container.javaClass
         val method = taskIdMethodCache.computeIfAbsent(type) { cls ->
