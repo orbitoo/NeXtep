@@ -7,7 +7,10 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import com.elbert.nextep.display.WORKSPACE_SLOT_COUNT
+import com.elbert.nextep.display.WorkspaceSlotCount
 import com.elbert.nextep.logging.NeXtepLog
+import com.elbert.nextep.trigger.TriggerGesture
 import com.elbert.nextep.workspace.LandscapeVideoMode
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,7 +29,8 @@ data class WorkspaceTopConfig(
     val textFontFamily: String = TopTextStyle.DEFAULT_FAMILY,
     val textSizeSp: Int = TopTextStyle.DEFAULT_SIZE_SP,
     val textBold: Boolean = false,
-    val statusBarGestureEnabled: Boolean = true,
+    val statusBarGestureEnabled: Boolean = false,
+    val triggerGestures: Set<TriggerGesture> = TriggerGesture.DEFAULT_SET,
     val slotBackgroundSwipeEnabled: Boolean = true,
     val autoMinimizeMainOnTopAppSwitch: Boolean = false,
     val navigationButtonsEnabled: Boolean = false,
@@ -41,6 +45,7 @@ data class WorkspaceTopConfig(
     val slotAutoHibernateEnabled: Boolean = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED,
     val slotAutoHibernateTimeoutSeconds: Int = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
     val landscapeVideoMode: LandscapeVideoMode = LandscapeVideoMode.DEFAULT,
+    val slotCount: Int = WORKSPACE_SLOT_COUNT,
 )
 
 object WorkspaceConfigContract {
@@ -57,6 +62,8 @@ object WorkspaceConfigContract {
     const val EXTRA_TEXT_SIZE = "com.elbert.nextep.extra.TOP_TEXT_SIZE"
     const val EXTRA_TEXT_BOLD = "com.elbert.nextep.extra.TOP_TEXT_BOLD"
     const val EXTRA_STATUS_BAR_GESTURE_ENABLED = "com.elbert.nextep.extra.STATUS_BAR_GESTURE_ENABLED"
+    const val EXTRA_TRIGGER_GESTURES = "com.elbert.nextep.extra.TRIGGER_GESTURES"
+    const val EXTRA_SLOT_COUNT = "com.elbert.nextep.extra.SLOT_COUNT"
     const val EXTRA_FOUR_FINGER_GESTURE_ENABLED = "com.elbert.nextep.extra.FOUR_FINGER_GESTURE_ENABLED"
     const val EXTRA_FOUR_FINGER_GESTURE_BLOCK_GAMES = "com.elbert.nextep.extra.FOUR_FINGER_GESTURE_BLOCK_GAMES"
     const val EXTRA_FOUR_FINGER_GESTURE_BLACKLIST = "com.elbert.nextep.extra.FOUR_FINGER_GESTURE_BLACKLIST"
@@ -128,6 +135,11 @@ class WorkspaceConfigReceiver : BroadcastReceiver() {
                 putInt(WorkspaceConfigContract.EXTRA_TEXT_SIZE, settings.textSizeSp)
                 putBoolean(WorkspaceConfigContract.EXTRA_TEXT_BOLD, settings.textBold)
                 putBoolean(WorkspaceConfigContract.EXTRA_STATUS_BAR_GESTURE_ENABLED, settings.statusBarGestureEnabled)
+                putString(
+                    WorkspaceConfigContract.EXTRA_TRIGGER_GESTURES,
+                    TriggerGesture.encode(settings.triggerGestures),
+                )
+                putInt(WorkspaceConfigContract.EXTRA_SLOT_COUNT, settings.slotCount)
                 putBoolean(WorkspaceConfigContract.EXTRA_FOUR_FINGER_GESTURE_ENABLED, settings.fourFingerGestureEnabled)
                 putBoolean(WorkspaceConfigContract.EXTRA_FOUR_FINGER_GESTURE_BLOCK_GAMES, settings.fourFingerGestureBlockGames)
                 putStringArrayList(WorkspaceConfigContract.EXTRA_FOUR_FINGER_GESTURE_BLACKLIST,
@@ -249,6 +261,15 @@ object WorkspaceConfigClient {
     private fun parseConfig(extras: Bundle?): WorkspaceTopConfig? {
         if (extras == null || !extras.containsKey(WorkspaceConfigContract.EXTRA_CONTENT_MODE) ||
             !extras.containsKey(WorkspaceConfigContract.EXTRA_MANUAL_APP_ORDER)) return null
+        val legacyStatusBarGesture = extras.getBoolean(
+            WorkspaceConfigContract.EXTRA_STATUS_BAR_GESTURE_ENABLED,
+            false,
+        )
+        val triggerGestures = if (extras.containsKey(WorkspaceConfigContract.EXTRA_TRIGGER_GESTURES)) {
+            TriggerGesture.decode(extras.getString(WorkspaceConfigContract.EXTRA_TRIGGER_GESTURES))
+        } else {
+            if (legacyStatusBarGesture) setOf(TriggerGesture.STATUS_BAR_SWIPE) else emptySet()
+        }
         return WorkspaceTopConfig(
             languageTag = extras.getString(WorkspaceConfigContract.EXTRA_LANGUAGE_TAG).orEmpty()
                 .takeIf { it in AppLanguage.languageTags }.orEmpty(),
@@ -274,9 +295,11 @@ object WorkspaceConfigClient {
             textSizeSp = (extras?.getInt(WorkspaceConfigContract.EXTRA_TEXT_SIZE, TopTextStyle.DEFAULT_SIZE_SP)
                 ?: TopTextStyle.DEFAULT_SIZE_SP).coerceIn(TopTextStyle.MIN_SIZE_SP, TopTextStyle.MAX_SIZE_SP),
             textBold = extras?.getBoolean(WorkspaceConfigContract.EXTRA_TEXT_BOLD, false) ?: false,
-            statusBarGestureEnabled = extras?.getBoolean(
-                WorkspaceConfigContract.EXTRA_STATUS_BAR_GESTURE_ENABLED, true,
-            ) ?: true,
+            statusBarGestureEnabled = TriggerGesture.STATUS_BAR_SWIPE in triggerGestures,
+            triggerGestures = triggerGestures,
+            slotCount = WorkspaceSlotCount.normalize(
+                extras.getInt(WorkspaceConfigContract.EXTRA_SLOT_COUNT, WORKSPACE_SLOT_COUNT),
+            ),
             fourFingerGestureEnabled = extras.getBoolean(
                 WorkspaceConfigContract.EXTRA_FOUR_FINGER_GESTURE_ENABLED, true,
             ),

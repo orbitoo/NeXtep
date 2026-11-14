@@ -1,6 +1,9 @@
 package com.elbert.nextep.config
 
 import android.content.Context
+import com.elbert.nextep.display.WORKSPACE_SLOT_COUNT
+import com.elbert.nextep.display.WorkspaceSlotCount
+import com.elbert.nextep.trigger.TriggerGesture
 import com.elbert.nextep.workspace.LandscapeVideoMode
 
 class SettingsRepository(private val context: Context) {
@@ -18,6 +21,7 @@ class SettingsRepository(private val context: Context) {
         val textSizeSp: Int,
         val textBold: Boolean,
         val statusBarGestureEnabled: Boolean,
+        val triggerGestures: Set<TriggerGesture> = TriggerGesture.DEFAULT_SET,
         val slotBackgroundSwipeEnabled: Boolean,
         val autoMinimizeMainOnTopAppSwitch: Boolean,
         val navigationButtonsEnabled: Boolean,
@@ -31,56 +35,68 @@ class SettingsRepository(private val context: Context) {
         val slotAutoHibernateEnabled: Boolean = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED,
         val slotAutoHibernateTimeoutSeconds: Int = WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
         val landscapeVideoMode: LandscapeVideoMode = LandscapeVideoMode.DEFAULT,
+        val slotCount: Int = WORKSPACE_SLOT_COUNT,
     )
 
-    fun topBarSettings(): TopBarSettings = TopBarSettings(
-        title = preferences.getString(KEY_TOP_TITLE, DEFAULT_TOP_TITLE)
-            ?.trim()
-            ?.takeIf(String::isNotEmpty)
-            ?: DEFAULT_TOP_TITLE,
-        contentMode = TopContentMode.resolve(preferences.getString("top_content_mode", null), preferences.getString(KEY_TOP_TITLE, "").orEmpty()),
-        showSeconds = preferences.getBoolean("top_show_seconds", false),
-        frostStrength = preferences.getInt("frost_strength", 50).coerceIn(0, 100),
-        manualAppOrder = preferences.getBoolean(KEY_MANUAL_APP_ORDER, false),
-        appComponents = preferences.getString(KEY_TOP_APPS, null)
-            ?.split(COMPONENT_SEPARATOR)
-            ?.filter(String::isNotBlank)
-            .orEmpty(),
-        textScroll = preferences.getBoolean("top_text_scroll", false),
-        textFontFamily = TopTextStyle.resolveFamily(preferences.getString("top_text_font", null)),
-        textSizeSp = preferences.getInt("top_text_size", TopTextStyle.DEFAULT_SIZE_SP)
-            .coerceIn(TopTextStyle.MIN_SIZE_SP, TopTextStyle.MAX_SIZE_SP),
-        textBold = preferences.getBoolean("top_text_bold", false),
-        statusBarGestureEnabled = preferences.getBoolean("status_bar_gesture_enabled", true),
-        slotBackgroundSwipeEnabled = preferences.getBoolean("slot_background_swipe_enabled", true),
-        autoMinimizeMainOnTopAppSwitch = preferences.getBoolean("auto_minimize_main_on_top_app_switch", false),
-        navigationButtonsEnabled = preferences.getBoolean("navigation_buttons_enabled", false),
-        swapAnimationDurationMs = WorkspaceConfigContract.normalizeSwapAnimationDurationMs(
-            preferences.getInt(KEY_SWAP_ANIMATION_DURATION_MS, WorkspaceConfigContract.DEFAULT_SWAP_ANIMATION_DURATION_MS),
-        ),
-        fourFingerGestureEnabled = preferences.getBoolean(KEY_FOUR_FINGER_GESTURE_ENABLED, true),
-        fourFingerGestureBlockGames = preferences.getBoolean(KEY_FOUR_FINGER_GESTURE_BLOCK_GAMES, true),
-        fourFingerGestureBlacklist = preferences.getStringSet(KEY_FOUR_FINGER_GESTURE_BLACKLIST, emptySet())
-            .orEmpty().toSet(),
-        blockSystemDragShareEnabled = preferences.getBoolean(KEY_BLOCK_SYSTEM_DRAG_SHARE_ENABLED,
-            WorkspaceConfigContract.DEFAULT_BLOCK_SYSTEM_DRAG_SHARE_ENABLED),
-        returnAfterSharingEnabled = preferences.getBoolean(KEY_RETURN_AFTER_SHARING_ENABLED,
-            WorkspaceConfigContract.DEFAULT_RETURN_AFTER_SHARING_ENABLED),
-        exitOnLock = preferences.getBoolean(KEY_EXIT_ON_LOCK, false),
-        slotAutoHibernateEnabled = preferences.getBoolean(
-            KEY_SLOT_AUTO_HIBERNATE_ENABLED,
-            WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED,
-        ),
-        slotAutoHibernateTimeoutSeconds = WorkspaceConfigContract.normalizeSlotAutoHibernateTimeoutSeconds(
-            preferences.getInt(
-                KEY_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
-                WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+    fun topBarSettings(): TopBarSettings {
+        val triggerGestures = if (preferences.contains(KEY_TRIGGER_GESTURES)) {
+            TriggerGesture.decode(preferences.getString(KEY_TRIGGER_GESTURES, null))
+        } else {
+            TriggerGesture.DEFAULT_SET
+        }
+        return TopBarSettings(
+            title = preferences.getString(KEY_TOP_TITLE, DEFAULT_TOP_TITLE)
+                ?.trim()
+                ?.takeIf(String::isNotEmpty)
+                ?: DEFAULT_TOP_TITLE,
+            contentMode = TopContentMode.resolve(preferences.getString("top_content_mode", null), preferences.getString(KEY_TOP_TITLE, "").orEmpty()),
+            showSeconds = preferences.getBoolean("top_show_seconds", false),
+            frostStrength = preferences.getInt("frost_strength", 50).coerceIn(0, 100),
+            manualAppOrder = preferences.getBoolean(KEY_MANUAL_APP_ORDER, false),
+            appComponents = preferences.getString(KEY_TOP_APPS, null)
+                ?.split(COMPONENT_SEPARATOR)
+                ?.filter(String::isNotBlank)
+                .orEmpty(),
+            textScroll = preferences.getBoolean("top_text_scroll", false),
+            textFontFamily = TopTextStyle.resolveFamily(preferences.getString("top_text_font", null)),
+            textSizeSp = preferences.getInt("top_text_size", TopTextStyle.DEFAULT_SIZE_SP)
+                .coerceIn(TopTextStyle.MIN_SIZE_SP, TopTextStyle.MAX_SIZE_SP),
+            textBold = preferences.getBoolean("top_text_bold", false),
+            statusBarGestureEnabled = TriggerGesture.STATUS_BAR_SWIPE in triggerGestures,
+            triggerGestures = triggerGestures,
+            slotBackgroundSwipeEnabled = preferences.getBoolean("slot_background_swipe_enabled", true),
+            autoMinimizeMainOnTopAppSwitch = preferences.getBoolean("auto_minimize_main_on_top_app_switch", false),
+            navigationButtonsEnabled = preferences.getBoolean("navigation_buttons_enabled", false),
+            swapAnimationDurationMs = WorkspaceConfigContract.normalizeSwapAnimationDurationMs(
+                preferences.getInt(KEY_SWAP_ANIMATION_DURATION_MS, WorkspaceConfigContract.DEFAULT_SWAP_ANIMATION_DURATION_MS),
             ),
-        ),
-        landscapeVideoMode = LandscapeVideoMode.fromWireValue(
-            preferences.getString(KEY_LANDSCAPE_VIDEO_MODE, null),
-        ),
-    )
+            fourFingerGestureEnabled = preferences.getBoolean(KEY_FOUR_FINGER_GESTURE_ENABLED, true),
+            fourFingerGestureBlockGames = preferences.getBoolean(KEY_FOUR_FINGER_GESTURE_BLOCK_GAMES, true),
+            fourFingerGestureBlacklist = preferences.getStringSet(KEY_FOUR_FINGER_GESTURE_BLACKLIST, emptySet())
+                .orEmpty().toSet(),
+            blockSystemDragShareEnabled = preferences.getBoolean(KEY_BLOCK_SYSTEM_DRAG_SHARE_ENABLED,
+                WorkspaceConfigContract.DEFAULT_BLOCK_SYSTEM_DRAG_SHARE_ENABLED),
+            returnAfterSharingEnabled = preferences.getBoolean(KEY_RETURN_AFTER_SHARING_ENABLED,
+                WorkspaceConfigContract.DEFAULT_RETURN_AFTER_SHARING_ENABLED),
+            exitOnLock = preferences.getBoolean(KEY_EXIT_ON_LOCK, false),
+            slotAutoHibernateEnabled = preferences.getBoolean(
+                KEY_SLOT_AUTO_HIBERNATE_ENABLED,
+                WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_ENABLED,
+            ),
+            slotAutoHibernateTimeoutSeconds = WorkspaceConfigContract.normalizeSlotAutoHibernateTimeoutSeconds(
+                preferences.getInt(
+                    KEY_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+                    WorkspaceConfigContract.DEFAULT_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS,
+                ),
+            ),
+            landscapeVideoMode = LandscapeVideoMode.fromWireValue(
+                preferences.getString(KEY_LANDSCAPE_VIDEO_MODE, null),
+            ),
+            slotCount = WorkspaceSlotCount.normalize(
+                preferences.getInt(KEY_SLOT_COUNT, WORKSPACE_SLOT_COUNT),
+            ),
+        )
+    }
 
     fun setFourFingerGestureEnabled(enabled: Boolean) {
         preferences.edit().putBoolean(KEY_FOUR_FINGER_GESTURE_ENABLED, enabled).apply()
@@ -110,7 +126,23 @@ class SettingsRepository(private val context: Context) {
     }
 
     fun setStatusBarGestureEnabled(enabled: Boolean) {
-        preferences.edit().putBoolean("status_bar_gesture_enabled", enabled).apply()
+        val updated = topBarSettings().triggerGestures.toMutableSet().apply {
+            if (enabled) add(TriggerGesture.STATUS_BAR_SWIPE) else remove(TriggerGesture.STATUS_BAR_SWIPE)
+        }
+        setTriggerGestures(updated)
+    }
+
+    fun setTriggerGestures(gestures: Set<TriggerGesture>) {
+        val normalized = TriggerGesture.normalize(gestures)
+        preferences.edit()
+            .putString(KEY_TRIGGER_GESTURES, TriggerGesture.encode(normalized))
+            .putBoolean("status_bar_gesture_enabled", TriggerGesture.STATUS_BAR_SWIPE in normalized)
+            .apply()
+        notifyTopContentChanged()
+    }
+
+    fun setSlotCount(slotCount: Int) {
+        preferences.edit().putInt(KEY_SLOT_COUNT, WorkspaceSlotCount.normalize(slotCount)).apply()
         notifyTopContentChanged()
     }
 
@@ -244,6 +276,8 @@ class SettingsRepository(private val context: Context) {
         const val KEY_SLOT_AUTO_HIBERNATE_ENABLED = "slot_auto_hibernate_enabled"
         const val KEY_SLOT_AUTO_HIBERNATE_TIMEOUT_SECONDS = "slot_auto_hibernate_timeout_seconds"
         const val KEY_LANDSCAPE_VIDEO_MODE = "landscape_video_mode"
+        const val KEY_SLOT_COUNT = "workspace_slot_count"
+        const val KEY_TRIGGER_GESTURES = "workspace_trigger_gestures"
         const val DEFAULT_TOP_TITLE = ""
         const val COMPONENT_SEPARATOR = "\n"
         const val MAX_TOP_APPS = 36
