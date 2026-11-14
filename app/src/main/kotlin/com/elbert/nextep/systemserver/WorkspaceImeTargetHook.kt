@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.SurfaceControl
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import com.elbert.nextep.framework.HyperOsFreeformCompat
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.workspace.SystemServerWorkspaceBridge
 
@@ -102,6 +103,7 @@ internal object WorkspaceImeTargetHook {
     private fun isFullscreen(window: Any): Boolean {
         val task = call(window, "getTask") ?: return false
         if (call(task, "getWindowingMode") != 1) return false
+        if (HyperOsFreeformCompat.isMiuiFreeformTaskContainer(task)) return false
         val configuration = call(task, "getConfiguration") ?: return false
         val extra = field(configuration, "mOplusExtraConfiguration")
         return extra == null || call(extra, "getScenario") !in setOf(1, 2)

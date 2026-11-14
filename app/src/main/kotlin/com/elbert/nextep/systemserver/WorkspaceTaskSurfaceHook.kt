@@ -5,6 +5,7 @@ import android.graphics.Rect
 import android.view.SurfaceControl
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import com.elbert.nextep.framework.HyperOsFreeformCompat
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.workspace.SystemServerWorkspaceBridge
 import java.util.Collections
@@ -80,6 +81,11 @@ internal object WorkspaceTaskSurfaceHook {
 
     private fun fit(task: Any, leash: SurfaceControl, transaction: SurfaceControl.Transaction) {
         if (!leash.isValid || call(task, "getWindowingMode") != 1) return
+        if (HyperOsFreeformCompat.isMiuiFreeformTaskContainer(task)) {
+            promotedTasks.remove(task)
+            slotTasks.remove(task)
+            return
+        }
         val configuration = call(task, "getConfiguration") ?: return
         val extra = field(configuration, "mOplusExtraConfiguration")
         if (extra != null && call(extra, "getScenario") in setOf(1, 2)) {

@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.SurfaceControl
 import android.view.WindowManager
+import com.elbert.nextep.framework.HyperOsFreeformCompat
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.workspace.SystemServerWorkspaceBridge
 import io.github.libxposed.api.XposedInterface
@@ -166,6 +167,7 @@ class NativeFloatingWindowLayerHooker : XposedInterface.Hooker {
     private fun isFloating(task: Any): Boolean {
         val mode = call(task, "getWindowingMode") as? Int
         if (mode == 5 || mode == 2) return true // Freeform and picture-in-picture.
+        if (HyperOsFreeformCompat.isMiuiFreeformTaskContainer(task)) return true
         val config = call(task, "getConfiguration") as? Configuration ?: return false
         val extra = field(config, "mOplusExtraConfiguration") ?: return false
         return call(extra, "getScenario") in setOf(1, 2)

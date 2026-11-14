@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.SurfaceControl
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import com.elbert.nextep.framework.HyperOsFreeformCompat
 import com.elbert.nextep.logging.NeXtepLog
 import com.elbert.nextep.workspace.SystemServerWorkspaceBridge
 
@@ -94,6 +95,7 @@ internal object WorkspaceDisplayHierarchyHook {
         val container = field(change, "mContainer") ?: return false
         val mode = call(container, "getWindowingMode")
         if (mode == 5 || mode == 2) return true
+        if (HyperOsFreeformCompat.isMiuiFreeformTaskContainer(container)) return true
         val config = call(container, "getConfiguration") ?: return false
         val extra = field(config, "mOplusExtraConfiguration") ?: return false
         return call(extra, "getScenario") in setOf(1, 2)
