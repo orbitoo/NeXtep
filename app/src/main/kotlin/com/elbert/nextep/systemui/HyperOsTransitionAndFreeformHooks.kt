@@ -39,11 +39,21 @@ import java.util.concurrent.atomic.AtomicInteger
  * 3. Toggles `TYPE_STATUS_BAR` click-through & alpha when NeXtep is visible over the status bar.
  */
 object HyperOsTransitionAndFreeformHooks {
+    internal data class TransitionRootTransform(
+        val scale: Float,
+        val tx: Float,
+        val ty: Float,
+        val crop: Rect? = null,
+    )
+
     private data class TrackedTransitionRoot(
         val token: IBinder,
         val rootLeash: SurfaceControl,
         val originalOffset: Point,
-        val childLeashes: List<SurfaceControl>,
+        val scale: Float,
+        val tx: Float,
+        val ty: Float,
+        val resetChildLeashes: List<SurfaceControl>,
         val taskIds: List<Int>,
     )
 
@@ -57,7 +67,9 @@ object HyperOsTransitionAndFreeformHooks {
     private const val TRANSIT_CLOSE = 2
     private const val TRANSIT_TO_FRONT = 3
     private const val TRANSIT_TO_BACK = 4
-    private const val FLAG_IS_WALLPAPER = 1
+    private const val FLAG_SHOW_WALLPAPER = 1
+    private const val FLAG_IS_WALLPAPER = 2
+    private const val ACTIVITY_TYPE_HOME = 2
     private const val DECOR_DOT_RELATIVE_Z = 1_000_000
     private val REASSERT_DELAYS_MS = longArrayOf(400L, 1500L)
 
@@ -65,6 +77,7 @@ object HyperOsTransitionAndFreeformHooks {
     private val transitionGeneration = AtomicInteger(0)
     private val transitionsLock = Any()
     private val activeRoots = HashMap<IBinder, TrackedTransitionRoot>()
+    private val activeCounterScaledLeashes = HashMap<IBinder, List<SurfaceControl>>()
     private val freeformTaskInfos = ConcurrentHashMap<Int, Any>()
     private val savedStatusBars: MutableMap<View, SavedStatusBarState> =
         Collections.synchronizedMap(WeakHashMap())
@@ -102,19 +115,25 @@ object HyperOsTransitionAndFreeformHooks {
         }
         mainHandler.post {
             setPinnedStatusBarHidden(active)
+            FloatingWindowTouchPassThroughController.notifyFloatingWindowsChanged()
         }
     }
 
     fun releaseAllTransitionRoots() {
         transitionGeneration.incrementAndGet()
         val drained = synchronized(transitionsLock) {
-            activeRoots.values.toList().also { activeRoots.clear() }
+            activeRoots.entries.map { (token, entry) ->
+                entry to (activeCounterScaledLeashes.remove(token) ?: emptyList())
+            }.also {
+                activeRoots.clear()
+                activeCounterScaledLeashes.clear()
+            }
         }
         if (drained.isEmpty()) return
         val tx = SurfaceControl.Transaction()
         try {
-            for (entry in drained) {
-                resetTransitionRoot(entry, tx)
+            for ((entry, counterScaled) in drained) {
+                resetTransitionRoot(entry, counterScaled, tx)
             }
             tx.apply()
         } finally {
@@ -164,17 +183,44 @@ object HyperOsTransitionAndFreeformHooks {
             module.hook(onFinish).intercept(object : XposedInterface.Hooker {
                 override fun intercept(chain: XposedInterface.Chain): Any? {
                     val token = chain.args.firstOrNull() as? IBinder
+                    var finishedTaskIds: List<Int> = emptyList()
                     if (token != null) {
                         val activeTransition = activeByToken.remove(token)
                         val finishT = if (activeTransition != null && finishTField != null) {
                             runCatching { finishTField.get(activeTransition) as? SurfaceControl.Transaction }.getOrNull()
                         } else null
-                        handleTransitionFinish(token, finishT)
+                        finishedTaskIds = handleTransitionFinish(token, finishT)
                     }
-                    return chain.proceed()
+                    return try {
+                        chain.proceed()
+                    } finally {
+                        reapplyTasksAfterTransition(finishedTaskIds)
+                    }
                 }
             })
         }
+        transitionsClass.declaredMethods
+            .filter { it.name == "onAbort" && it.parameterCount >= 1 }
+            .forEach { method ->
+                method.isAccessible = true
+                module.hook(method).intercept(object : XposedInterface.Hooker {
+                    override fun intercept(chain: XposedInterface.Chain): Any? {
+                        val firstArg = chain.args.firstOrNull()
+                        val token = (firstArg as? IBinder)
+                            ?: firstArg?.let { runCatching { tokenField.get(it) as? IBinder }.getOrNull() }
+                        var abortedTaskIds: List<Int> = emptyList()
+                        if (token != null) {
+                            activeByToken.remove(token)
+                            abortedTaskIds = handleTransitionFinish(token, finishT = null)
+                        }
+                        return try {
+                            chain.proceed()
+                        } finally {
+                            reapplyTasksAfterTransition(abortedTaskIds)
+                        }
+                    }
+                })
+            }
         NeXtepLog.info("hyperos_transitions", "Installed Shell Transitions root fitting hooks")
     }
 
@@ -183,7 +229,7 @@ object HyperOsTransitionAndFreeformHooks {
         if (type !in TRANSIT_OPEN..TRANSIT_TO_BACK) return false
         val changes = call(info, "getChanges") as? List<*> ?: return false
         if (changes.isEmpty()) return false
-        var hasTaskChange = false
+        var hasStandardTaskChange = false
         for (change in changes) {
             if (change == null) return false
             val endDisplay = call(change, "getEndDisplayId") as? Int ?: return false
@@ -194,7 +240,6 @@ object HyperOsTransitionAndFreeformHooks {
             if (startRot >= 0 && endRot >= 0 && startRot != endRot) return false
             val task = call(change, "getTaskInfo") as? ActivityManager.RunningTaskInfo
             if (task != null) {
-                hasTaskChange = true
                 val state = TaskInfoCompat.readWindowState(task) ?: return false
                 if (state.displayId != Display.DEFAULT_DISPLAY ||
                     state.windowingMode != 1 ||
@@ -203,9 +248,12 @@ object HyperOsTransitionAndFreeformHooks {
                 ) {
                     return false
                 }
+                if (state.activityType != ACTIVITY_TYPE_HOME) {
+                    hasStandardTaskChange = true
+                }
             }
         }
-        return hasTaskChange
+        return hasStandardTaskChange
     }
 
     private fun fitTransitionRoot(
@@ -229,93 +277,228 @@ object HyperOsTransitionAndFreeformHooks {
         if (!rootLeash.isValid) return
         val offset = (call(targetRoot, "getOffset") as? Point)?.let(::Point) ?: Point(0, 0)
 
-        val scale = geom.contentScale
-        val tx = geom.contentTranslationX + scale * offset.x
-        val ty = geom.contentTranslationY + scale * offset.y
-        val crop = Rect(
-            geom.availableLeft - offset.x,
-            geom.availableTop - offset.y,
-            geom.availableRight - offset.x,
-            geom.availableBottom - offset.y,
-        )
-
+        val transform = computeTransitionRootTransform(geom, offset.x, offset.y)
+        val counterTransform = computeCounterScaledChildTransform(transform)
         val changes = call(info, "getChanges") as? List<*> ?: emptyList<Any>()
-        val childLeashes = ArrayList<SurfaceControl>()
+        val resetChildLeashes = ArrayList<SurfaceControl>()
+        val counterScaledLeashes = ArrayList<SurfaceControl>()
         val taskIds = ArrayList<Int>()
         for (change in changes) {
             if (change == null) continue
             val sc = call(change, "getLeash") as? SurfaceControl
             if (sc != null && sc.isValid) {
-                childLeashes += sc
                 val flags = call(change, "getFlags") as? Int ?: 0
                 val task = call(change, "getTaskInfo") as? ActivityManager.RunningTaskInfo
-                if (task != null) taskIds += task.taskId
-                // Reset child task transforms so root scaling doesn't double-transform children.
-                startT.setScale(sc, 1f, 1f)
-                startT.setPosition(sc, 0f, 0f)
-                startT.setCrop(sc, null)
-                if (flags and FLAG_IS_WALLPAPER != 0) {
+                if (task != null) {
+                    val state = TaskInfoCompat.readWindowState(task)
+                    if (state?.activityType == ACTIVITY_TYPE_HOME) {
+                        // Launcher scales HOME's DecorView itself; counter-scale the HOME
+                        // child leash so rootLeash does not double-scale HOME in transitions.
+                        counterScaledLeashes += sc
+                        applyCounterScaledChildTransform(startT, sc, counterTransform)
+                    } else {
+                        taskIds += task.taskId
+                        // Reset only child task leashes previously transformed by TaskSurfaceCompat;
+                        // non-task containers and wallpaper leashes keep their native coordinates.
+                        if (TaskSurfaceCompat.isPresentationTracked(task.taskId, sc)) {
+                            resetChildLeashes += sc
+                            resetChildLeashTransform(startT, sc)
+                        }
+                    }
+                }
+                if (flags and (FLAG_SHOW_WALLPAPER or FLAG_IS_WALLPAPER) != 0) {
                     clearBlurBestEffort(startT, sc)
                 }
             }
         }
 
-        startT.setCrop(rootLeash, crop)
-        startT.setScale(rootLeash, scale, scale)
-        startT.setPosition(rootLeash, tx, ty)
+        val trackedEntry = TrackedTransitionRoot(
+            token = token,
+            rootLeash = rootLeash,
+            originalOffset = offset,
+            scale = transform.scale,
+            tx = transform.tx,
+            ty = transform.ty,
+            resetChildLeashes = resetChildLeashes,
+            taskIds = taskIds,
+        )
+        val registered = synchronized(transitionsLock) {
+            if (transitionGeneration.get() == expectedGeneration && activeGeometry != null) {
+                activeRoots[token] = trackedEntry
+                if (counterScaledLeashes.isNotEmpty()) {
+                    activeCounterScaledLeashes[token] = counterScaledLeashes
+                } else {
+                    activeCounterScaledLeashes.remove(token)
+                }
+                true
+            } else {
+                false
+            }
+        }
+        if (!registered) return
+
+        applyTransitionRootTransform(startT, trackedEntry)
 
         // Apply immediately at frame 0 before WM renders the first transition frame.
         val immediate = SurfaceControl.Transaction()
         try {
-            immediate.setCrop(rootLeash, crop)
-            immediate.setScale(rootLeash, scale, scale)
-            immediate.setPosition(rootLeash, tx, ty)
+            for (sc in resetChildLeashes) {
+                resetChildLeashTransform(immediate, sc)
+            }
+            for (sc in counterScaledLeashes) {
+                applyCounterScaledChildTransform(immediate, sc, counterTransform)
+            }
+            applyTransitionRootTransform(immediate, trackedEntry)
             immediate.apply()
         } finally {
             immediate.close()
         }
-
-        synchronized(transitionsLock) {
-            if (transitionGeneration.get() == expectedGeneration && activeGeometry != null) {
-                activeRoots[token] = TrackedTransitionRoot(token, rootLeash, offset, childLeashes, taskIds)
-            }
-        }
     }
 
-    private fun handleTransitionFinish(token: IBinder, finishT: SurfaceControl.Transaction?) {
-        val tracked = synchronized(transitionsLock) { activeRoots.remove(token) } ?: return
+    private fun handleTransitionFinish(token: IBinder, finishT: SurfaceControl.Transaction?): List<Int> {
+        var counterScaled: List<SurfaceControl> = emptyList()
+        val tracked = synchronized(transitionsLock) {
+            counterScaled = activeCounterScaledLeashes.remove(token) ?: emptyList()
+            activeRoots.remove(token)
+        } ?: return emptyList()
         if (finishT != null) {
-            resetTransitionRoot(tracked, finishT)
+            resetTransitionRoot(tracked, counterScaled, finishT)
         } else {
             val tx = SurfaceControl.Transaction()
             try {
-                resetTransitionRoot(tracked, tx)
+                resetTransitionRoot(tracked, counterScaled, tx)
                 tx.apply()
             } finally {
                 tx.close()
             }
         }
-        val geom = activeGeometry
-        if (geom != null) {
-            for (taskId in tracked.taskIds) {
-                if (TaskSurfaceCompat.ownsMainTask(taskId)) {
-                    TaskSurfaceCompat.reapply(taskId, geom)
-                }
+        return tracked.taskIds
+    }
+
+    private fun reapplyTasksAfterTransition(taskIds: List<Int>) {
+        if (taskIds.isEmpty()) return
+        val geom = activeGeometry ?: return
+        for (taskId in taskIds) {
+            if (TaskSurfaceCompat.ownsMainTask(taskId) && !shouldDeferTaskSurfaceFit(taskId, null)) {
+                TaskSurfaceCompat.reapply(taskId, geom)
             }
         }
     }
 
-    private fun resetTransitionRoot(entry: TrackedTransitionRoot, tx: SurfaceControl.Transaction) {
+    internal fun shouldDeferTaskSurfaceFit(taskId: Int, leash: Any?): Boolean {
+        if (!HyperOsEnvironment.isHyperOs() || activeGeometry == null) return false
+        synchronized(transitionsLock) {
+            if (activeRoots.isEmpty()) return false
+            val it = activeRoots.entries.iterator()
+            while (it.hasNext()) {
+                val entry = it.next().value
+                if (!entry.rootLeash.isValid) {
+                    it.remove()
+                    continue
+                }
+                if (taskId in entry.taskIds) return true
+                if (leash != null && entry.resetChildLeashes.any { it === leash }) return true
+            }
+        }
+        return false
+    }
+
+    internal fun appendActiveTransitionTransforms(tx: SurfaceControl.Transaction) {
+        if (!HyperOsEnvironment.isHyperOs() || activeGeometry == null) return
+        val snapshot = synchronized(transitionsLock) {
+            if (activeRoots.isEmpty()) return
+            val valid = ArrayList<Pair<TrackedTransitionRoot, List<SurfaceControl>>>(activeRoots.size)
+            val it = activeRoots.entries.iterator()
+            while (it.hasNext()) {
+                val (token, entry) = it.next()
+                if (entry.rootLeash.isValid) {
+                    valid += entry to (activeCounterScaledLeashes[token] ?: emptyList())
+                } else {
+                    activeCounterScaledLeashes.remove(token)
+                    it.remove()
+                }
+            }
+            valid
+        }
+        for ((entry, counterScaled) in snapshot) {
+            for (sc in entry.resetChildLeashes) {
+                resetChildLeashTransform(tx, sc)
+            }
+            if (counterScaled.isNotEmpty()) {
+                val counterTransform = computeCounterScaledChildTransform(
+                    TransitionRootTransform(entry.scale, entry.tx, entry.ty, crop = null),
+                )
+                for (sc in counterScaled) {
+                    applyCounterScaledChildTransform(tx, sc, counterTransform)
+                }
+            }
+            applyTransitionRootTransform(tx, entry)
+        }
+    }
+
+    internal fun computeTransitionRootTransform(
+        geom: WorkspaceGeometry,
+        offsetX: Int,
+        offsetY: Int,
+    ): TransitionRootTransform {
+        val scale = geom.contentScale
+        val tx = geom.contentTranslationX + scale * offsetX
+        val ty = geom.contentTranslationY + scale * offsetY
+        return TransitionRootTransform(scale = scale, tx = tx, ty = ty, crop = null)
+    }
+
+    /** Computes the inverse child transform that cancels [rootTransform] in screen coordinates. */
+    internal fun computeCounterScaledChildTransform(rootTransform: TransitionRootTransform): TransitionRootTransform {
+        val scale = rootTransform.scale
+        if (scale <= 0f) return TransitionRootTransform(scale = 1f, tx = 0f, ty = 0f, crop = null)
+        return TransitionRootTransform(
+            scale = 1f / scale,
+            tx = -rootTransform.tx / scale,
+            ty = -rootTransform.ty / scale,
+            crop = null,
+        )
+    }
+
+    private fun applyTransitionRootTransform(tx: SurfaceControl.Transaction, entry: TrackedTransitionRoot) {
+        if (!entry.rootLeash.isValid) return
+        tx.setCrop(entry.rootLeash, null)
+        tx.setScale(entry.rootLeash, entry.scale, entry.scale)
+        tx.setPosition(entry.rootLeash, entry.tx, entry.ty)
+    }
+
+    private fun applyCounterScaledChildTransform(
+        tx: SurfaceControl.Transaction,
+        sc: SurfaceControl,
+        counterTransform: TransitionRootTransform,
+    ) {
+        if (!sc.isValid) return
+        tx.setCrop(sc, null)
+        tx.setScale(sc, counterTransform.scale, counterTransform.scale)
+        tx.setPosition(sc, counterTransform.tx, counterTransform.ty)
+    }
+
+    private fun resetChildLeashTransform(tx: SurfaceControl.Transaction, sc: SurfaceControl) {
+        if (!sc.isValid) return
+        tx.setScale(sc, 1f, 1f)
+        tx.setPosition(sc, 0f, 0f)
+        tx.setCrop(sc, null)
+    }
+
+    private fun resetTransitionRoot(
+        entry: TrackedTransitionRoot,
+        counterScaledLeashes: List<SurfaceControl>,
+        tx: SurfaceControl.Transaction,
+    ) {
         if (entry.rootLeash.isValid) {
             tx.setScale(entry.rootLeash, 1f, 1f)
             tx.setPosition(entry.rootLeash, entry.originalOffset.x.toFloat(), entry.originalOffset.y.toFloat())
             tx.setCrop(entry.rootLeash, null)
         }
-        for (sc in entry.childLeashes) {
-            if (sc.isValid) {
-                tx.setScale(sc, 1f, 1f)
-                tx.setPosition(sc, 0f, 0f)
-            }
+        for (sc in entry.resetChildLeashes) {
+            resetChildLeashTransform(tx, sc)
+        }
+        for (sc in counterScaledLeashes) {
+            resetChildLeashTransform(tx, sc)
         }
     }
 
@@ -331,16 +514,13 @@ object HyperOsTransitionAndFreeformHooks {
         }.getOrNull() ?: return
 
         repoClass.declaredMethods
-            .filter {
-                (it.name == "onTaskAppeared" || it.name == "onTaskModeChanged") &&
-                    it.parameterTypes.lastOrNull() == taskInfoClass
-            }
+            .filter { matchesMiuiFreeformRepoCallback(it.name, it.parameterTypes, taskInfoClass) }
             .forEach { method ->
                 method.isAccessible = true
                 module.hook(method).intercept(object : XposedInterface.Hooker {
                     override fun intercept(chain: XposedInterface.Chain): Any? {
                         val result = chain.proceed()
-                        val info = chain.args.lastOrNull()
+                        val info = extractMiuiFreeformTaskInfoArg(chain.args, taskInfoClass)
                         if (info != null) {
                             val taskId = readTaskId(info)
                             if (taskId != null && taskId >= 0) {
@@ -348,8 +528,25 @@ object HyperOsTransitionAndFreeformHooks {
                                 if (HyperOsFreeformCompat.trackFreeformTask(taskId)) {
                                     publishTrackedFreeformTasks()
                                 }
+                                FloatingWindowTouchPassThroughController.notifyFloatingWindowsChanged()
                             }
                         }
+                        return result
+                    }
+                })
+            }
+
+        repoClass.declaredMethods
+            .filter {
+                it.name == "onTaskStateChanged" &&
+                    it.parameterTypes.firstOrNull() == Int::class.javaPrimitiveType
+            }
+            .forEach { method ->
+                method.isAccessible = true
+                module.hook(method).intercept(object : XposedInterface.Hooker {
+                    override fun intercept(chain: XposedInterface.Chain): Any? {
+                        val result = chain.proceed()
+                        FloatingWindowTouchPassThroughController.notifyFloatingWindowsChanged()
                         return result
                     }
                 })
@@ -368,6 +565,7 @@ object HyperOsTransitionAndFreeformHooks {
                             if (HyperOsFreeformCompat.untrackFreeformTask(taskId)) {
                                 publishTrackedFreeformTasks()
                             }
+                            FloatingWindowTouchPassThroughController.notifyFloatingWindowsChanged()
                         }
                         return result
                     }
@@ -379,22 +577,99 @@ object HyperOsTransitionAndFreeformHooks {
                 "com.android.wm.shell.multitasking.miuimultiwinswitch.miuiwindowdecor.decoration.MiuiDecorationDot",
             )
             dotClass.declaredMethods
-                .filter { it.name == "addWindow" }
+                .filter { it.name == "addWindow" || it.name == "relayout" }
                 .forEach { method ->
                     method.isAccessible = true
                     module.hook(method).intercept(object : XposedInterface.Hooker {
                         override fun intercept(chain: XposedInterface.Chain): Any? {
-                            val dotWindow = chain.proceed() ?: return null
-                            if (activeGeometry == null) return dotWindow
-                            val dotHost = chain.thisObject ?: return dotWindow
-                            raiseDotWindowAboveFreeformTask(dotHost, dotWindow)
-                            return dotWindow
+                            val result = chain.proceed()
+                            if (activeGeometry == null) return result
+                            val dotHost = chain.thisObject ?: return result
+                            val dotWindow = resolveDotWindow(dotHost, result)
+                            if (dotWindow != null) {
+                                raiseDotWindowAboveFreeformTask(dotHost, dotWindow)
+                            }
+                            return result
                         }
                     })
                 }
         }
 
         NeXtepLog.info("hyperos_freeform", "Installed MiuiFreeformModeTaskRepository & MiuiDecorationDot hooks")
+    }
+
+    internal fun matchesMiuiFreeformRepoCallback(
+        methodName: String,
+        parameterTypes: Array<Class<*>>,
+        taskInfoClass: Class<*>,
+    ): Boolean = (methodName == "onTaskAppeared" || methodName == "onTaskModeChanged") &&
+        parameterTypes.any { taskInfoClass.isAssignableFrom(it) }
+
+    internal fun extractMiuiFreeformTaskInfoArg(
+        args: List<Any?>,
+        taskInfoClass: Class<*>,
+    ): Any? = args.firstOrNull { it != null && taskInfoClass.isAssignableFrom(it.javaClass) }
+
+    internal fun trackedFloatingBounds(): Map<Int, Rect> {
+        if (freeformTaskInfos.isEmpty()) return emptyMap()
+        val result = LinkedHashMap<Int, Rect>(freeformTaskInfos.size)
+        for ((taskId, info) in freeformTaskInfos) {
+            val bounds = extractFreeformScreenBounds(info)
+            if (bounds != null && !bounds.isEmpty) {
+                result[taskId] = bounds
+            }
+        }
+        return result
+    }
+
+    internal fun computeScaledFreeformRect(rawBounds: Rect?, scale: Float): Rect? {
+        if (rawBounds == null || rawBounds.isEmpty) return null
+        val effectiveScale = if (scale > 0f && scale.isFinite()) scale else 1f
+        val width = (rawBounds.width() * effectiveScale).toInt()
+        val height = (rawBounds.height() * effectiveScale).toInt()
+        if (width <= 0 || height <= 0) return null
+        return Rect(rawBounds.left, rawBounds.top, rawBounds.left + width, rawBounds.top + height)
+    }
+
+    private fun extractFreeformScreenBounds(taskInfo: Any): Rect? {
+        val runningTask = (findField(taskInfo.javaClass, "mTaskInfo")?.get(taskInfo) as? ActivityManager.RunningTaskInfo)
+            ?: (call(taskInfo, "getTaskInfo") as? ActivityManager.RunningTaskInfo)
+        if (runningTask != null) {
+            val visible = TaskInfoCompat.readMember(
+                runningTask,
+                listOf("isVisible", "visible", "mIsVisible"),
+                listOf("isVisible"),
+            ) as? Boolean
+            if (visible == false) return null
+        }
+
+        (call(taskInfo, "getScaledBounds") as? Rect)?.takeIf { !it.isEmpty }?.let { return Rect(it) }
+        (call(taskInfo, "getScaledAnimatingBounds") as? Rect)?.takeIf { !it.isEmpty }?.let { return Rect(it) }
+
+        val pinned = (call(taskInfo, "isMiniPinedState") as? Boolean == true) ||
+            (call(taskInfo, "isNormalPinedState") as? Boolean == true)
+        if (pinned) {
+            (call(taskInfo, "getPinFloatingWindowPos") as? Rect)?.takeIf { !it.isEmpty }?.let { return Rect(it) }
+        }
+
+        val rawBounds = (call(taskInfo, "getTaskBounds") as? Rect)?.takeIf { !it.isEmpty }
+        val scale = (call(taskInfo, "getFreeformScale") as? Float)
+            ?: (call(taskInfo, "getTaskScale") as? Float)
+            ?: 1f
+        computeScaledFreeformRect(rawBounds, scale)?.let { return it }
+
+        if (runningTask != null) {
+            return TaskInfoCompat.readWindowState(runningTask)?.bounds?.takeIf { !it.isEmpty }
+        }
+        return null
+    }
+
+    private fun resolveDotWindow(dotHost: Any, callResult: Any?): Any? {
+        if (callResult != null && call(callResult, "getWindowSurface") != null) return callResult
+        return findField(dotHost.javaClass, "mWindow")?.get(dotHost)
+            ?: findField(dotHost.javaClass, "mDecorationWindow")?.get(dotHost)
+            ?: findField(dotHost.javaClass, "mMiuiWindow")?.get(dotHost)
+            ?: call(dotHost, "getWindow")
     }
 
     private fun raiseDotWindowAboveFreeformTask(dotHost: Any, dotWindow: Any) {
