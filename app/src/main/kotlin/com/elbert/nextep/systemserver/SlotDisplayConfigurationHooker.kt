@@ -13,7 +13,7 @@ class SlotDisplayConfigurationHooker : XposedInterface.Hooker {
         runCatching {
             val info = call(display, "getDisplayInfo") ?: return@runCatching
             val name = field(info, "name") as? String ?: return@runCatching
-            if (!name.startsWith("NeXtep-slot-")) return@runCatching
+            if (!com.elbert.nextep.workspace.WorkspaceVirtualDisplayNames.isWorkspaceVirtualDisplay(name)) return@runCatching
             val service = field(display, "mWmService") ?: error("Window manager unavailable")
             val root = field(service, "mRoot") ?: error("Display root unavailable")
             val physical = call(root, "getDefaultDisplay") ?: error("Default display unavailable")

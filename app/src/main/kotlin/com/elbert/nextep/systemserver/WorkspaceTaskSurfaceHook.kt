@@ -115,7 +115,7 @@ internal object WorkspaceTaskSurfaceHook {
 
     private fun isSlotDisplay(display: Any): Boolean {
         val info = call(display, "getDisplayInfo") ?: return false
-        return (field(info, "name") as? String)?.startsWith("NeXtep-slot-") == true
+        return com.elbert.nextep.workspace.WorkspaceVirtualDisplayNames.isWorkspaceVirtualDisplay(field(info, "name") as? String)
     }
 
     private fun field(target: Any, name: String): Any? =

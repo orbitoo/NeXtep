@@ -39,7 +39,7 @@ internal object WorkspaceDisplayHierarchyHook {
                         val slot = call(root, "getDisplayContent", if (from == 0) to else from)
                             ?: return@firstNotNullOfOrNull null
                         val info = call(slot, "getDisplayInfo") ?: return@firstNotNullOfOrNull null
-                        if ((field(info, "name") as? String)?.startsWith("NeXtep-slot-") != true) {
+                        if (!com.elbert.nextep.workspace.WorkspaceVirtualDisplayNames.isWorkspaceVirtualDisplay(field(info, "name") as? String)) {
                             return@firstNotNullOfOrNull null
                         }
                         service to root

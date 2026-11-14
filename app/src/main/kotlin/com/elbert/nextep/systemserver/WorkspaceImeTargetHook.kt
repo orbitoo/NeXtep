@@ -29,7 +29,7 @@ internal object WorkspaceImeTargetHook {
                     val destination = chain.getArg(0) ?: return chain.proceed()
                     val source = field(window, "mDisplayContent") ?: return chain.proceed()
                     val info = call(source, "getDisplayInfo") ?: return chain.proceed()
-                    if ((field(info, "name") as? String)?.startsWith("NeXtep-slot-") != true ||
+                    if (!com.elbert.nextep.workspace.WorkspaceVirtualDisplayNames.isWorkspaceVirtualDisplay(field(info, "name") as? String) ||
                         call(destination, "getDisplayId") != 0) return chain.proceed()
                     if (SystemServerWorkspaceBridge.isWorkspaceActive(context)) {
                         val transfersIme = field(source, "mImeInputTarget") === window
