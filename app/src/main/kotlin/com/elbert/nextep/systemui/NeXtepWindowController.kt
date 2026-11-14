@@ -258,6 +258,7 @@ class NeXtepWindowController(
         if (FeatureGate.VIRTUAL_DISPLAY_SLOTS.defaultEnabled) {
             slotCoordinator?.activate()
         }
+        FloatingWindowTouchPassThroughController.notifyFloatingWindowsChanged()
         return geometry()
     }
 
@@ -303,7 +304,10 @@ class NeXtepWindowController(
             ?: Result.failure(IllegalStateException("VirtualDisplay slot unavailable"))
     }
 
-    fun onTasksChanged() = slotCoordinator?.onTasksChanged()
+    fun onTasksChanged() {
+        slotCoordinator?.onTasksChanged()
+        FloatingWindowTouchPassThroughController.notifyFloatingWindowsChanged()
+    }
 
     internal fun energySnapshot() = android.os.Bundle().apply {
         putInt("slot_count", slotWindows.count { it.displayId() != null })
@@ -377,6 +381,7 @@ class NeXtepWindowController(
             refreshWallpaperBackdrop()
         }
         NeXtepLog.info("workspace_configuration", "Reconfigured geometry=$geometry")
+        FloatingWindowTouchPassThroughController.notifyFloatingWindowsChanged()
         geometry
     }
 
@@ -424,6 +429,7 @@ class NeXtepWindowController(
     private fun initializeIfNeeded() {
         if (initialized) return
         initialized = true
+        FloatingWindowTouchPassThroughController.attachTaskRepository(taskRepository)
         val windowType = SystemUiWindowTypeResolver.resolve() ?: run {
             initialized = false
             return
@@ -678,6 +684,7 @@ class NeXtepWindowController(
         }
     }.apply {
         sidebarView = this
+        FloatingWindowTouchPassThroughController.installSidebarPassThrough(this)
         setBackgroundColor(Color.TRANSPARENT)
         if (FeatureGate.VIRTUAL_DISPLAY_SLOTS.defaultEnabled) {
             slotWindows = List(WORKSPACE_SLOT_COUNT) { index -> VirtualDisplaySlot(context, index) }

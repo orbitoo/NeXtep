@@ -124,12 +124,14 @@ internal class ControlAreaPager(context: Context, private val functions: TopAppS
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        FloatingWindowTouchPassThroughController.registerHost(this)
         installTouchableStatusBarPassThrough()
         post { SystemUiStatusBarGestureInstaller.install(this) }
     }
 
     override fun onDetachedFromWindow() {
         cancelGesture()
+        FloatingWindowTouchPassThroughController.unregisterHost(this)
         removeTouchableStatusBarPassThrough()
         super.onDetachedFromWindow()
     }
@@ -355,6 +357,7 @@ internal class ControlAreaPager(context: Context, private val functions: TopAppS
                         video.setNativeInputAvailable(false)
                         NeXtepLog.warn("control_video", "Native player touch region unavailable", it)
                     }
+                    FloatingWindowTouchPassThroughController.subtractFloatingRegions(this, region)
                 }
                 null
             }
