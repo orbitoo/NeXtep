@@ -87,6 +87,17 @@ object TaskInfoCompat {
         methodNames = listOf("getUserId"),
     )
 
+    fun readIsFocused(info: ActivityManager.RunningTaskInfo): Boolean =
+        readMember(info, listOf("isFocused", "focused", "mIsFocused"), listOf("isFocused")) as? Boolean ?: false
+
+    fun readTokenIdentity(token: Any?): Int {
+        if (token == null) return 0
+        // WindowContainerToken is re-wrapped per Binder transaction, whereas its underlying
+        // BinderProxy from asBinder() preserves pointer identity across IPC calls.
+        val binder = invokeNoArg(token, listOf("asBinder"))
+        return binder?.let(System::identityHashCode) ?: token.hashCode()
+    }
+
     fun userIdentifier(userHandle: UserHandle): Int? = readInt(
         target = userHandle,
         fieldNames = listOf("mHandle", "identifier"),

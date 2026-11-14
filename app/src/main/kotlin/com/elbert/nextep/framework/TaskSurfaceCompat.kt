@@ -73,6 +73,7 @@ object TaskSurfaceCompat {
     private val displayExchanges = ConcurrentHashMap<Int, Long>()
     private val exchangeDisplays = ConcurrentHashMap<Int, Int>()
     private val observedStates = ConcurrentHashMap<Int, TaskInfoCompat.WindowState>()
+    private val observedStateTimesNs = ConcurrentHashMap<Int, Long>()
     private val observedLeashes = ConcurrentHashMap<Int, Any>()
     private data class MethodKey(val type: Class<*>, val name: String, val arguments: List<Class<*>?>)
     private val methodCache = ConcurrentHashMap<MethodKey, Method>()
@@ -97,13 +98,15 @@ object TaskSurfaceCompat {
         activityManager = context.getSystemService(ActivityManager::class.java)
     }
 
-    fun observeTaskInfo(info: ActivityManager.RunningTaskInfo, leash: Any? = null) {
-        TaskInfoCompat.readWindowState(info)?.let { observeTaskState(info.taskId, it) }
+    fun observeTaskInfo(info: ActivityManager.RunningTaskInfo, leash: Any? = null): TaskInfoCompat.WindowState? {
+        val state = TaskInfoCompat.readWindowState(info)?.also { observeTaskState(info.taskId, it) }
         if (leash != null) observedLeashes[info.taskId] = leash
+        return state
     }
 
     fun observeTaskState(taskId: Int, state: TaskInfoCompat.WindowState) {
         observedStates[taskId] = state
+        observedStateTimesNs[taskId] = System.nanoTime()
         slotSurfaces[taskId]?.let { slot ->
             if (slot.displayId != state.displayId || state.vendorWindowed ||
                 state.windowingMode != WINDOWING_MODE_FULLSCREEN
@@ -111,8 +114,19 @@ object TaskSurfaceCompat {
         }
     }
 
+    internal fun freshObservedState(
+        taskId: Int,
+        nowNs: Long = System.nanoTime(),
+        maxAgeNs: Long = OBSERVED_STATE_FRESH_NS,
+    ): TaskInfoCompat.WindowState? {
+        val state = observedStates[taskId] ?: return null
+        val updatedNs = observedStateTimesNs[taskId] ?: return null
+        return if (nowNs - updatedNs in 0L..maxAgeNs) state else null
+    }
+
     fun forgetTaskSurface(taskId: Int) {
         observedStates.remove(taskId)
+        observedStateTimesNs.remove(taskId)
         observedLeashes.remove(taskId)
         slotSurfaces.remove(taskId)
         // An OEM reparent may vanish/reappear with a replacement leash. Preserve
@@ -802,6 +816,7 @@ object TaskSurfaceCompat {
 
     @Suppress("DEPRECATION")
     private fun findLiveTaskState(taskId: Int): TaskInfoCompat.WindowState? {
+        freshObservedState(taskId)?.let { return it }
         val manager = checkNotNull(activityManager) { "Live task access is unavailable" }
         WorkspaceEnergyDiagnostics.taskQueries.incrementAndGet()
         val taskInfo = manager.getRunningTasks(MAX_TASK_QUERY).firstOrNull { it.taskId == taskId }
@@ -921,6 +936,7 @@ object TaskSurfaceCompat {
         else -> type
     }
 
+    internal const val OBSERVED_STATE_FRESH_NS = 250_000_000L
     private const val REAPPLY_WINDOW_MS = 2_000L
     private const val MAX_TASK_QUERY = 64
     private const val WINDOWING_MODE_FULLSCREEN = 1
