@@ -16,6 +16,7 @@ import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import java.lang.reflect.Field
 import java.lang.reflect.Method
+import java.lang.reflect.Modifier
 import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
@@ -41,6 +42,8 @@ object MiuiHomeAndAssistantHooks {
         Collections.synchronizedMap(WeakHashMap())
     private val contentViewBlurConfigured: MutableMap<Any, Boolean> =
         Collections.synchronizedMap(WeakHashMap())
+    private val assistantHeaderBlurSuppressed = AtomicBoolean(false)
+    private val assistantChildViewBlurOverride = ThreadLocal<Boolean?>()
 
     @Volatile
     private var skipLayerAnimUntilUptimeMs: Long = Long.MIN_VALUE
@@ -316,6 +319,15 @@ object MiuiHomeAndAssistantHooks {
         }, "NeXtep-MiuiHomeScan").apply { isDaemon = true }.start()
     }
 
+    internal data class AssistantHeaderBlurTargets(
+        val headControllerField: Field,
+        val searchManagerField: Field,
+        val managerContextField: Field?,
+        val updateHeaderStyleMethod: Method,
+        val deviceBlurSupportMethod: Method,
+        val widgetMenuAttachMethod: Method?,
+    )
+
     private fun installAssistantBlurHook(module: XposedModule, classLoader: ClassLoader) {
         val adapterClass = runCatching {
             classLoader.loadClass("com.miui.personalassistant.device.DeviceBlurBlendAdapter")
@@ -339,6 +351,10 @@ object MiuiHomeAndAssistantHooks {
         }
         val clearContainerBlurMethod = widgetBlurManagerClass?.let { cls ->
             runCatching { cls.getDeclaredMethod("b", View::class.java).apply { isAccessible = true } }.getOrNull()
+        }
+        val headerTargets = resolveAssistantHeaderBlurTargets(classLoader)
+        if (headerTargets != null) {
+            installAssistantChildViewBlurHooks(module, headerTargets)
         }
 
         val isViewBlur = runCatching {
@@ -392,6 +408,39 @@ object MiuiHomeAndAssistantHooks {
                             clearContainerBlurMethod = clearContainerBlurMethod,
                             enable = forceWindowBlur,
                         )
+                        syncAssistantHeaderBlur(
+                            adapter = host,
+                            contentViewField = contentViewField,
+                            headerTargets = headerTargets,
+                            suppressViewBlur = forceWindowBlur,
+                        )
+                    }
+                    return result
+                }
+            })
+        }
+
+        runCatching {
+            adapterClass.getDeclaredMethod("onEnter", Boolean::class.javaPrimitiveType).apply { isAccessible = true }
+        }.getOrNull()?.let { enterMethod ->
+            module.hook(enterMethod).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    val result = chain.proceed()
+                    val host = chain.thisObject
+                    if (host != null && shouldForceWindowBlur(blurStateField, overlayField, host)) {
+                        syncAssistantContentBlurContainer(
+                            adapter = host,
+                            contentViewField = contentViewField,
+                            enableContainerBlurMethod = enableContainerBlurMethod,
+                            clearContainerBlurMethod = clearContainerBlurMethod,
+                            enable = true,
+                        )
+                        syncAssistantHeaderBlur(
+                            adapter = host,
+                            contentViewField = contentViewField,
+                            headerTargets = headerTargets,
+                            suppressViewBlur = true,
+                        )
                     }
                     return result
                 }
@@ -413,6 +462,12 @@ object MiuiHomeAndAssistantHooks {
                             clearContainerBlurMethod = clearContainerBlurMethod,
                             enable = false,
                         )
+                        syncAssistantHeaderBlur(
+                            adapter = host,
+                            contentViewField = contentViewField,
+                            headerTargets = headerTargets,
+                            suppressViewBlur = false,
+                        )
                         blurAdapterActiveCache.remove(host)
                     }
                     return result
@@ -420,6 +475,208 @@ object MiuiHomeAndAssistantHooks {
             })
         }
         NeXtepLog.info("miui_assistant_blur", "Installed DeviceBlurBlendAdapter hooks")
+    }
+
+    /**
+     * In native `BLUR_VIEW` mode, `HomeHeaderWithSearchManager` (`Lm5/m`) applies `GlobalSearchView`'s
+     * `"button-thick"` `MaterialToken` (`COLOR_DODGE #99525252`), expecting `DecorView` to have already
+     * darkened the blur buffer via `LUMINOSITY #a81f1f1f` + `OVERLAY #ff9a9a9a`. When NeXtep switches the
+     * minus-one overlay to `BLUR_WINDOW` in workspace mode, `mContentView` is an un-tinted pass-through
+     * blur container (and MIUI's `PassWindowBlur` ignores the scaled workspace task transform), causing
+     * `COLOR_DODGE` to blow out the search box and `+` button to solid cream-white.
+     *
+     * Scoping `q.B(Context) -> false` strictly to `HomeHeaderWithSearchManager` and `WidgetMenu` makes
+     * MIUI execute its own native `BLUR_WINDOW` branch (clearing `HyperMaterialUtils` view blur and
+     * applying translucent `#33ffffff` drawables directly over SurfaceFlinger's window blur) without
+     * starving `WidgetBackgroundBlurManager` widget card blur.
+     */
+    private fun installAssistantChildViewBlurHooks(
+        module: XposedModule,
+        targets: AssistantHeaderBlurTargets,
+    ) {
+        module.hook(targets.deviceBlurSupportMethod).intercept(object : XposedInterface.Hooker {
+            override fun intercept(chain: XposedInterface.Chain): Any? {
+                if (shouldSuppressAssistantChildViewBlurCall()) {
+                    return false
+                }
+                return chain.proceed()
+            }
+        })
+
+        module.hook(targets.updateHeaderStyleMethod).intercept(object : XposedInterface.Hooker {
+            override fun intercept(chain: XposedInterface.Chain): Any? {
+                val manager = chain.thisObject ?: return chain.proceed()
+                val context = runCatching { targets.managerContextField?.get(manager) as? Context }.getOrNull()
+                return interceptAssistantHeaderStyleUpdate(
+                    shouldSuppress = { shouldSuppressAssistantChildViewBlurForContext(context) },
+                ) {
+                    chain.proceed()
+                }
+            }
+        })
+
+        targets.widgetMenuAttachMethod?.let { attachMethod ->
+            module.hook(attachMethod).intercept(object : XposedInterface.Hooker {
+                override fun intercept(chain: XposedInterface.Chain): Any? {
+                    val view = chain.thisObject as? View ?: return chain.proceed()
+                    return if (shouldSuppressAssistantChildViewBlurForContext(view.context)) {
+                        withAssistantChildViewBlurOverride(allowViewBlur = false) {
+                            chain.proceed()
+                        }
+                    } else {
+                        chain.proceed()
+                    }
+                }
+            })
+        }
+        NeXtepLog.info("miui_assistant_blur", "Installed minus-one header/menu window-blur adaptation hooks")
+    }
+
+    internal fun resolveAssistantHeaderBlurTargets(
+        classLoader: ClassLoader,
+        assistContentViewClassName: String = "com.miui.personalassistant.core.view.AssistContentView",
+        globalSearchViewClassName: String = "com.miui.personalassistant.homepage.header.GlobalSearchView",
+        deviceUtilsClassName: String = "com.miui.personalassistant.utils.q",
+        widgetMenuClassName: String = "com.miui.personalassistant.homepage.shortcut.WidgetMenu",
+    ): AssistantHeaderBlurTargets? {
+        val assistContentViewClass = runCatching { classLoader.loadClass(assistContentViewClassName) }.getOrNull()
+            ?: return null
+        val globalSearchViewClass = runCatching { classLoader.loadClass(globalSearchViewClassName) }.getOrNull()
+            ?: return null
+        val deviceUtilsClass = runCatching { classLoader.loadClass(deviceUtilsClassName) }.getOrNull()
+            ?: return null
+
+        val headControllerField = runCatching {
+            assistContentViewClass.getDeclaredField("mHeadController").apply { isAccessible = true }
+        }.getOrNull() ?: return null
+
+        val searchManagerField = headControllerField.type.declaredFields.firstOrNull { field ->
+            field.type.declaredFields.any { it.type == globalSearchViewClass }
+        }?.apply { isAccessible = true } ?: return null
+
+        val searchManagerClass = searchManagerField.type
+        val managerContextField = generateSequence<Class<*>>(searchManagerClass) { it.superclass }
+            .firstNotNullOfOrNull { cls ->
+                cls.declaredFields.firstOrNull { Context::class.java.isAssignableFrom(it.type) }
+            }?.apply { isAccessible = true }
+
+        val abstractRefreshName = searchManagerClass.superclass?.declaredMethods?.firstOrNull {
+            Modifier.isAbstract(it.modifiers) && it.parameterCount == 0 && it.returnType == Void.TYPE
+        }?.name ?: "g"
+
+        val updateHeaderStyleMethod = runCatching {
+            searchManagerClass.getDeclaredMethod(abstractRefreshName).apply { isAccessible = true }
+        }.getOrNull() ?: return null
+
+        val deviceBlurSupportMethod = resolveDeviceBlurSupportMethod(deviceUtilsClass) ?: return null
+
+        val widgetMenuAttachMethod = runCatching {
+            classLoader.loadClass(widgetMenuClassName)
+                .getDeclaredMethod("onAttachedToWindow")
+                .apply { isAccessible = true }
+        }.getOrNull()
+
+        return AssistantHeaderBlurTargets(
+            headControllerField = headControllerField,
+            searchManagerField = searchManagerField,
+            managerContextField = managerContextField,
+            updateHeaderStyleMethod = updateHeaderStyleMethod,
+            deviceBlurSupportMethod = deviceBlurSupportMethod,
+            widgetMenuAttachMethod = widgetMenuAttachMethod,
+        )
+    }
+
+    internal fun resolveDeviceBlurSupportMethod(deviceUtilsClass: Class<*>): Method? {
+        val uniqueStatic = deviceUtilsClass.declaredMethods.singleOrNull { method ->
+            Modifier.isStatic(method.modifiers) &&
+                method.returnType == Boolean::class.javaPrimitiveType &&
+                method.parameterTypes.contentEquals(arrayOf(Context::class.java))
+        }
+        return (uniqueStatic ?: runCatching {
+            deviceUtilsClass.getDeclaredMethod("B", Context::class.java)
+        }.getOrNull())?.apply { isAccessible = true }
+    }
+
+    internal fun shouldSuppressAssistantChildViewBlurCall(): Boolean =
+        assistantChildViewBlurOverride.get() == false
+
+    internal fun <T> withAssistantChildViewBlurOverride(allowViewBlur: Boolean, block: () -> T): T {
+        val previous = assistantChildViewBlurOverride.get()
+        assistantChildViewBlurOverride.set(allowViewBlur)
+        return try {
+            block()
+        } finally {
+            if (previous == null) {
+                assistantChildViewBlurOverride.remove()
+            } else {
+                assistantChildViewBlurOverride.set(previous)
+            }
+        }
+    }
+
+    internal fun <T> interceptAssistantHeaderStyleUpdate(
+        shouldSuppress: () -> Boolean,
+        proceed: () -> T,
+    ): T {
+        val explicitOverride = assistantChildViewBlurOverride.get()
+        if (explicitOverride != null) {
+            if (!explicitOverride) {
+                assistantHeaderBlurSuppressed.set(true)
+            }
+            return proceed()
+        }
+        return if (shouldSuppress()) {
+            assistantHeaderBlurSuppressed.set(true)
+            withAssistantChildViewBlurOverride(allowViewBlur = false) {
+                proceed()
+            }
+        } else {
+            proceed()
+        }
+    }
+
+    internal fun syncAssistantHeaderBlur(
+        adapter: Any,
+        contentViewField: Field?,
+        headerTargets: AssistantHeaderBlurTargets?,
+        suppressViewBlur: Boolean,
+    ) {
+        if (headerTargets == null) return
+        if (!suppressViewBlur && !assistantHeaderBlurSuppressed.get()) return
+        val contentView = contentViewField?.let { field ->
+            runCatching { field.get(adapter) }.getOrNull()
+        } ?: return
+        val headController = runCatching { headerTargets.headControllerField.get(contentView) }.getOrNull() ?: return
+        val searchManager = runCatching { headerTargets.searchManagerField.get(headController) }.getOrNull() ?: return
+        if (suppressViewBlur) {
+            assistantHeaderBlurSuppressed.set(true)
+            runCatching {
+                withAssistantChildViewBlurOverride(allowViewBlur = false) {
+                    headerTargets.updateHeaderStyleMethod.invoke(searchManager)
+                }
+            }.onFailure { NeXtepLog.warn("miui_assistant_blur", "Failed to apply window-blur header style", it) }
+        } else {
+            runCatching {
+                withAssistantChildViewBlurOverride(allowViewBlur = true) {
+                    headerTargets.updateHeaderStyleMethod.invoke(searchManager)
+                }
+                assistantHeaderBlurSuppressed.set(false)
+            }.onFailure { NeXtepLog.warn("miui_assistant_blur", "Failed to restore view-blur header style", it) }
+        }
+    }
+
+    internal fun resetAssistantHeaderBlurStateForTests() {
+        assistantHeaderBlurSuppressed.set(false)
+        assistantChildViewBlurOverride.remove()
+    }
+
+    private fun shouldSuppressAssistantChildViewBlurForContext(context: Context?): Boolean {
+        if (HyperOsEnvironment.isMagnificationFallbackActive()) return false
+        if (context == null) return isWorkspaceActiveCached()
+        if (!SystemServerWorkspaceBridge.isGeometryObservationStarted()) {
+            SystemServerWorkspaceBridge.startGeometryObservation(context)
+        }
+        return SystemServerWorkspaceBridge.isWorkspaceActive(context)
     }
 
     /**
